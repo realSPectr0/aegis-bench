@@ -265,6 +265,9 @@ class ChatClient:
         else:
             payload["temperature"] = temperature
             payload["max_tokens"] = max_tokens
+        # Enable thinking for local models that support it (Qwen3, etc.)
+        if "api.openai.com" not in self.base_url:
+            payload["enable_thinking"] = True
         started = time.monotonic()
         response = None
         for attempt in range(self.max_retries + 1):
@@ -292,9 +295,14 @@ class ChatClient:
         elapsed = time.monotonic() - started
         body = response.json()
         try:
-            content = body["choices"][0]["message"]["content"]
+            message = body["choices"][0]["message"]
+            content = message["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError(f"Unexpected response schema from {url}") from exc
+        # Capture thinking/reasoning from models that return it separately
+        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        if reasoning and "<think>" not in (content or ""):
+            content = f"<think>{reasoning}</think>\n{content or ''}"
         metadata = {
             "latency_seconds": round(elapsed, 4),
             "usage": body.get("usage"),
