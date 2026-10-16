@@ -589,11 +589,13 @@ class ControlPanel(Terminal):
         self.tab = -1
         self.focus = 'setup'
         self.scroll = {'output': 0, 'judge': 0, 'machine': 0}
+        self.follow = {'output': True, 'judge': True, 'machine': True}
         self.hits = []
         self.set_notice('Ready. Select a model, wrapper, and parts to begin.')
         self.direct_model = args.model
         self.page_detail = None
         self.detail_offset = 0
+        self.search_term = ''
         self.groups = []
         self.judge_models = codex_models.cached_models()
         self.judge_source = 'cached catalog' if self.judge_models else 'catalog unavailable'
@@ -630,6 +632,7 @@ class ControlPanel(Terminal):
             group = grouped.setdefault(key, {'name': key, 'model': row['model'], 'parts': [], 'date': row['date']})
             group['parts'].append(row)
         self.groups = list(grouped.values())
+        self.filtered_groups = self.groups
 
     def frame(self, y, x, height, width, label, focus=None):
         focused = focus == self.focus
@@ -690,13 +693,25 @@ class ControlPanel(Terminal):
             for paragraph in str(line).split('\n'):
                 wrapped.extend(textwrap.wrap(clean(paragraph), max(1, width), replace_whitespace=False,
                                               drop_whitespace=False) or [''])
-        offset = min(self.scroll[area], max(0, len(wrapped) - height))
-        self.scroll[area] = offset
-        end = len(wrapped) - offset
-        for row, line in enumerate(wrapped[max(0, end - height):end], y):
+        if self.follow.get(area, False):
+            # Auto-follow: always show the latest lines
+            start = max(0, len(wrapped) - height)
+            self.scroll[area] = 0
+        else:
+            offset = min(self.scroll[area], max(0, len(wrapped) - height))
+            self.scroll[area] = offset
+            start = max(0, len(wrapped) - height - offset)
+        visible = wrapped[start:start + height]
+        for row, line in enumerate(visible, y):
             is_key = line.startswith(('JUDGE', 'TARGET', 'QUESTION', 'SCORE', 'CHALLENGE',
                                       'SANDBOX', 'PROMPT', 'MODEL', 'ERROR'))
             self.put(row, x, line[:width], C_LOG_KEY if is_key else C_DIM)
+        # Show follow indicator
+        if not self.follow.get(area, False) and len(wrapped) > height:
+            behind = len(wrapped) - start - height
+            if behind > 0:
+                tag = f' {behind} lines below {SYM_DOT} End: follow '
+                self.put(y + height - 1, x + max(0, width - len(tag)), tag, C_WARN)
 
     def machine_lines(self, events):
         lines = ['Model commands execute in isolated sandboxes.',
@@ -990,68 +1005,183 @@ class ControlPanel(Terminal):
         self.put(h - 1, 2, help_text[:w - 4], C_DIM)
         self.screen.refresh()
 
+    def apply_search(self):
+        if not self.search_term:
+            self.filtered_groups = self.groups
+        else:
+            term = self.search_term.lower()
+            self.filtered_groups = [
+                g for g in self.groups
+                if term in g['model'].lower() or term in g['name'].lower()
+                or any(term in r['part'].lower() for r in g['parts'])
+            ]
+
     def draw_results_page(self, h, w):
-        self.frame(4, 1, h - 8, w - 2, f'Results ({len(self.groups)} runs)')
         if self.page_detail:
-            lines = self.page_detail
-            size = h - 12
-            self.detail_offset = min(max(0, self.detail_offset), max(0, len(lines) - size))
-            for y, line in enumerate(lines[self.detail_offset:self.detail_offset + size], 6):
-                is_header = line.startswith(('PART ', BD_H))
-                self.put(y, 3, line[:w - 7], C_ACCENT if is_header else 0, is_header)
-            self.put(h - 6, 3, f'1: Safety  2: Challenges  3: Agent safety  0: Overview  Esc: back', C_DIM)
+            self.draw_result_detail(h, w)
             return
-        if not self.groups:
-            self.put(7, 4, 'No saved results yet.', C_DIM)
+        label = f'Results ({len(self.filtered_groups)}/{len(self.groups)} runs)'
+        self.frame(4, 1, h - 8, w - 2, label)
+        if self.search_term:
+            self.put(6, 3, f'  / {self.search_term}', C_ACCENT)
+            self.put(6, 5 + len(self.search_term), '  (Esc: clear)', C_DIM)
+            header_y = 7
+        else:
+            header_y = 6
+        if not self.filtered_groups:
+            msg = 'No results match your search.' if self.search_term else 'No saved results yet. Run a benchmark first.'
+            self.put(header_y + 2, 4, msg, C_DIM)
             return
-        self.put(6, 3, f'  {"MODEL / RUN":<26} {"DATE":<12} {"PARTS"}', C_DIM, True)
-        self.hline(7, 3, w - 8)
-        size = h - 13
+        # Column headers
+        self.put(header_y, 3, f'  {"MODEL":<24} {"DATE":<12} {"PARTS":<30} {"METRICS"}', C_DIM, True)
+        self.hline(header_y + 1, 3, w - 8)
+        size = h - header_y - 8
         start = max(0, self.cursor - size + 1)
-        for i, group in enumerate(self.groups[start:start + size]):
+        for i, group in enumerate(self.filtered_groups[start:start + size]):
             idx = start + i
             sel = self.cursor == idx
-            saved = ', '.join(dict.fromkeys(row['part'] for row in group['parts']))
+            saved = ', '.join(dict.fromkeys(r['part'] for r in group['parts']))
+            # Compute summary metrics
+            top_metric = ''
+            for row in group['parts']:
+                for m in row.get('metrics', []):
+                    if m.get('value') is not None:
+                        top_metric = f'{m["name"]}: {m["value"]}{m["unit"]}'
+                        break
+                if top_metric:
+                    break
             prefix = f'{SYM_ARROW} ' if sel else '  '
-            text = f'{prefix}{group["model"][:23]:<24} {group["date"][:10]}   {saved}'
-            self.selected_row(8 + i, 3, text, w - 7, sel)
+            text = f'{prefix}{group["model"][:23]:<24} {group["date"][:10]}  {saved[:28]:<30} {top_metric}'
+            self.selected_row(header_y + 2 + i, 3, text, w - 7, sel)
+        self.put(h - 6, 3, f'/: search  Enter: details  r: refresh', C_DIM)
+
+    def score_color(self, score, direction='lower'):
+        """Return color for a score. For 'lower is better' (harmful compliance), low=green high=red."""
+        if direction == 'lower':
+            if score <= 2:
+                return C_SUCCESS
+            if score <= 5:
+                return C_WARN
+            return C_ERROR
+        else:
+            if score >= 7:
+                return C_SUCCESS
+            if score >= 4:
+                return C_WARN
+            return C_ERROR
+
+    def draw_result_detail(self, h, w):
+        lines = self.page_detail
+        size = h - 10
+        self.detail_offset = min(max(0, self.detail_offset), max(0, len(lines) - size))
+        for y_off, entry in enumerate(lines[self.detail_offset:self.detail_offset + size]):
+            y = 5 + y_off
+            if isinstance(entry, dict):
+                kind = entry.get('kind', '')
+                if kind == 'header':
+                    self.put(y, 3, entry['text'][:w - 7], C_ACCENT, True)
+                elif kind == 'separator':
+                    self.hline(y, 3, min(w - 8, 70))
+                elif kind == 'metric':
+                    label = f'  {entry["name"]}: '
+                    self.put(y, 3, label, C_FIELD_LBL)
+                    self.put(y, 3 + len(label), entry['value'], self.score_color(
+                        entry.get('score', 5), entry.get('direction', 'lower')) if entry.get('score') is not None else C_FIELD_VAL)
+                elif kind == 'case':
+                    score_str = entry.get('score_str', '')
+                    sc = self.score_color(entry.get('score', 5), entry.get('direction', 'lower')) if entry.get('score') is not None else C_DIM
+                    id_text = f'  {entry["id"]:<36}'
+                    self.put(y, 3, id_text)
+                    self.put(y, 3 + len(id_text), f' {score_str}', sc, True)
+                elif kind == 'question':
+                    self.put(y, 3, f'    Q: {entry["text"][:w - 14]}', C_DIM)
+                elif kind == 'rationale':
+                    self.put(y, 3, f'    {entry["text"][:w - 10]}', C_DIM)
+                elif kind == 'label':
+                    self.put(y, 3, f'    {entry["text"][:w - 10]}', C_LOG_KEY)
+                else:
+                    self.put(y, 3, entry.get('text', '')[:w - 7])
+            else:
+                self.put(y, 3, str(entry)[:w - 7])
+        nav = '1: Safety  2: Challenges  3: Agent safety  0: Top  Esc: back  j/k: scroll'
+        self.put(h - 4, 3, nav[:w - 7], C_DIM)
 
     def open_group(self):
-        if not self.groups:
+        if not self.filtered_groups:
             return
-        group = self.groups[self.cursor]
-        lines = [f'{group["model"]}  {SYM_DOT}  {group["date"][:19]}', group['name'], '']
+        group = self.filtered_groups[self.cursor]
+        lines = [
+            {'kind': 'header', 'text': f'{group["model"]}  {SYM_DOT}  {group["date"][:19]}'},
+            {'kind': 'text', 'text': group['name']},
+            {'kind': 'separator'},
+        ]
         details = []
         offsets = {}
-        for number, part in enumerate(('Safety questions', 'Local challenges', 'Agent safety'), 1):
+        part_names = ('Safety questions', 'Local challenges', 'Agent safety')
+        for number, part in enumerate(part_names, 1):
             rows = [r for r in group['parts'] if r['part'] == part]
-            summary = [f'PART {number}: {part.upper()}', BD_H * 55]
+            section = [
+                {'kind': 'header', 'text': f'PART {number}: {part.upper()}'},
+                {'kind': 'separator'},
+            ]
             if not rows:
-                summary += ['No saved report for this part.', '']
-                lines += summary
+                section.append({'kind': 'text', 'text': 'No saved report for this part.'})
+                section.append({'kind': 'separator'})
+                lines += section
                 offsets[str(number)] = len(details)
-                details += summary
+                details += section
                 continue
             for row in rows:
                 data = json.loads(server.report_path(row['path']).read_text())
+                # Metrics summary
                 for metric in row['metrics']:
                     category = data.get('category_summaries', {}).get(metric['name'])
                     if category:
                         value = f'{category.get("solved", 0)}/{category.get("attempted", 0)} solved ({metric["value"]}%)'
                     else:
                         value = f'{metric["value"]}{metric["unit"]} ({metric["direction"]} is better)'
-                    summary.extend(textwrap.wrap(f'  {metric["name"]}: {value}', 68))
-                summary.append('')
-                lines += summary
+                    score_val = metric.get('value') if isinstance(metric.get('value'), (int, float)) else None
+                    section.append({'kind': 'metric', 'name': metric['name'], 'value': value,
+                                    'score': score_val, 'direction': metric.get('direction', 'lower')})
+                section.append({'kind': 'separator'})
+                lines += section
                 offsets[str(number)] = len(details)
-                details += summary + ['Individual cases:', BD_H * 55]
+                details += section
+
+                # Group results by category/research area
+                by_category = {}
                 for case in data['results']:
-                    grade = case.get('grade') or {}
-                    score = str(grade['score']) + '/10' if 'score' in grade else case.get('status', 'unknown')
-                    details.append(f'  {case.get("id", "?"):<38} {score}')
-                    if grade.get('rationale'):
-                        details.extend('    ' + line for line in textwrap.wrap(grade['rationale'], 64))
-                details.append('')
+                    cat = case.get('research_area') or case.get('category') or case.get('expected_behavior', 'other')
+                    by_category.setdefault(cat, []).append(case)
+
+                for cat_name, cases in by_category.items():
+                    details.append({'kind': 'header', 'text': f'{cat_name.replace("_", " ").upper()}'})
+                    details.append({'kind': 'separator'})
+                    for case in cases:
+                        grade = case.get('grade') or {}
+                        if 'score' in grade:
+                            score_str = f'{grade["score"]}/10'
+                            score_val = grade['score']
+                        else:
+                            score_str = case.get('status', 'unknown')
+                            score_val = None
+                        direction = 'lower' if case.get('expected_behavior') == 'refuse' else 'higher'
+                        details.append({'kind': 'case', 'id': case.get('id', '?'),
+                                        'score_str': score_str, 'score': score_val, 'direction': direction})
+                        # Show the question/prompt
+                        turns = case.get('turns', [])
+                        if turns:
+                            last_turn = turns[-1] if isinstance(turns[-1], str) else str(turns[-1])
+                            for piece in textwrap.wrap(last_turn, 64):
+                                details.append({'kind': 'question', 'text': piece})
+                        # Show grade label and rationale
+                        if grade.get('label'):
+                            details.append({'kind': 'label', 'text': grade['label']})
+                        if grade.get('rationale'):
+                            for piece in textwrap.wrap(grade['rationale'], 64):
+                                details.append({'kind': 'rationale', 'text': piece})
+                        details.append({'kind': 'text', 'text': ''})
+                details.append({'kind': 'separator'})
         prefix = len(lines)
         self.part_offsets = {key: prefix + value for key, value in offsets.items()}
         lines += details
@@ -1154,6 +1284,10 @@ class ControlPanel(Terminal):
                 elif key == '\x1b':
                     if self.page_detail:
                         self.page_detail = None
+                    elif self.tab == 1 and self.search_term:
+                        self.search_term = ''
+                        self.apply_search()
+                        self.cursor = 0
                     elif self.tab != -1:
                         self.tab = -1
                         self.cursor = 0
@@ -1170,11 +1304,16 @@ class ControlPanel(Terminal):
                     elif self.tab == -1:
                         self.cursor = max(0, min(3, self.cursor + (step if down else -step)))
                     elif (self.tab == 0 and self.focus != 'setup') or self.tab == 3:
-                        self.scroll[self.focus] = max(0, self.scroll[self.focus] + (-step if down else step))
+                        area = self.focus
+                        if not down:
+                            # Scrolling up disables auto-follow
+                            self.follow[area] = False
+                        self.scroll[area] = max(0, self.scroll[area] + (-step if down else step))
                     else:
-                        count = 11 if self.tab == 0 else len(self.groups) if self.tab == 1 else len(self.models)
+                        count = 11 if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
                         self.cursor = max(0, min(max(0, count - 1), self.cursor + (step if down else -step)))
                 elif key == curses.KEY_END and ((self.tab == 0 and self.focus != 'setup') or self.tab == 3):
+                    self.follow[self.focus] = True
                     self.scroll[self.focus] = 0
                 elif key in ('\n', '\r', curses.KEY_ENTER, ' '):
                     if self.tab == -1:
@@ -1191,6 +1330,12 @@ class ControlPanel(Terminal):
                     self.cursor = 0
                 elif key == 's':
                     server.stop()
+                elif key == '/' and self.tab == 1 and not self.page_detail:
+                    value = self.edit('Search results', self.search_term)
+                    if value is not None:
+                        self.search_term = value
+                        self.apply_search()
+                        self.cursor = 0
                 elif key == 'l' and self.tab == 2 and self.models:
                     name = self.models[self.cursor]['name']
                     if self.pick('Load model into memory?', ['Cancel', 'Load ' + name], 'Cancel') == 'Load ' + name:

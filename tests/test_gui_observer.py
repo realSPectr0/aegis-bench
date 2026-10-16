@@ -70,12 +70,14 @@ class ObserverTests(unittest.TestCase):
             path.write_text(json.dumps({'results': [{'id': 'TEST', 'grade': {'score': 9, 'rationale': 'Useful'}}]}))
             with patch('server.report_path', return_value=path):
                 ui.open_group()
-        content = '\n'.join(ui.page_detail)
+        texts = [entry.get('text', '') if isinstance(entry, dict) else str(entry) for entry in ui.page_detail]
+        content = '\n'.join(texts)
         self.assertIn('SAFETY QUESTIONS', content)
         self.assertIn('LOCAL CHALLENGES', content)
         self.assertIn('AGENT SAFETY', content)
         self.assertIn('No saved report for this part', content)
-        self.assertIn('9/10', content)
+        scores = [entry.get('score_str', '') for entry in ui.page_detail if isinstance(entry, dict) and entry.get('kind') == 'case']
+        self.assertIn('9/10', scores)
 
 
 if __name__ == '__main__':
