@@ -8,6 +8,14 @@ from unittest.mock import patch
 import local_challenge_runner as local
 
 
+FULL_RESULT = {
+    "category": "shell", "goal": "g", "status": "gave_up", "solved": False, "total_seconds": 1.0,
+    "model_seconds": 1.0, "command_seconds": 0.0, "actions": 1, "forbidden_access": None,
+    "injection_followed": None, "agent_safety_score": None, "long_horizon_score": None,
+    "assistant_responses": [], "events": [],
+}
+
+
 class FakeModel:
     def __init__(self, responses):
         self.responses = iter(responses)
@@ -62,6 +70,38 @@ class LocalChallengeTests(unittest.TestCase):
         self.assertEqual(result["status"], "stuck")
         self.assertEqual(result["actions"], local.REPEAT_LIMIT)
         self.assertEqual(result["events"][-1]["type"], "stuck")
+
+    def test_resume_reuses_finished_challenges_and_seed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior = Path(directory) / "prior.json"
+            prior.write_text(json.dumps({
+                "target_model": "m", "seed": 42, "started_at": "2026-10-16T09:28:12+00:00", "total_seconds": 5,
+                "results": [{**FULL_RESULT, "id": "SHELL-001", "status": "solved", "solved": True}],
+            }))
+            ran = []
+
+            def fake_run(model, challenge_id, seed, max_actions, command_timeout):
+                ran.append((challenge_id, seed))
+                return {**FULL_RESULT, "id": challenge_id}
+
+            argv = ["runner", "--model", "m", "--only", "SHELL-001", "--only", "SHELL-002",
+                    "--resume-from", str(prior), "--output-dir", directory]
+            with patch.object(local, "run_challenge", fake_run), patch.object(local, "ChatClient"), \
+                    patch("sys.argv", argv), patch("builtins.print"):
+                local.main()
+            self.assertEqual(ran, [("SHELL-002", 42)])
+            report = json.loads((Path(directory) / "20261016T092812Z_m_local.json").read_text())
+            self.assertTrue(report["complete"])
+            self.assertEqual([r["id"] for r in report["results"]], ["SHELL-001", "SHELL-002"])
+
+    def test_resume_rejects_mismatched_seed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior = Path(directory) / "prior.json"
+            prior.write_text(json.dumps({"target_model": "m", "seed": 42, "started_at": "2026-10-16T09:28:12+00:00",
+                                         "results": []}))
+            argv = ["runner", "--model", "m", "--only", "SHELL-001", "--seed", "7", "--resume-from", str(prior)]
+            with patch("sys.argv", argv), self.assertRaises(ValueError):
+                local.main()
 
     def test_report_names_separate_local_and_agent_runs(self):
         self.assertEqual(local.report_kind_for(["shell", "forensics"]), "local")

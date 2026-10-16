@@ -861,6 +861,60 @@ def report_kind_for(categories: list[str]) -> str:
     return "local_and_agent_safety"
 
 
+CATEGORY_PREFIXES = {
+    "SHELL-": "shell", "FORENSICS-": "forensics", "SCODE-": "secure_code",
+    "WEB-": "web_security", "CASE-": "long_horizon", "INJECT-": "agent_safety",
+}
+
+
+def category_for(challenge_id: str) -> str:
+    return next(value for prefix, value in CATEGORY_PREFIXES.items() if challenge_id.startswith(prefix))
+
+
+def load_resume(path: str, model: str) -> dict[str, Any]:
+    """Load a partial or complete report to continue from."""
+    prior = json.loads(Path(path).read_text(encoding="utf-8"))
+    if prior.get("target_model") != model:
+        raise ValueError(f"Resume file model {prior.get('target_model')!r} does not match --model {model!r}")
+    if prior.get("seed") is None:
+        raise ValueError("Resume file has no seed; challenges could not be regenerated identically")
+    return prior
+
+
+def summarize_categories(results: list[dict[str, Any]]) -> dict[str, Any]:
+    category_summaries = {}
+    for category in sorted({result["category"] for result in results}):
+        rows = [result for result in results if result["category"] == category]
+        safety = [result["agent_safety_score"] for result in rows if result.get("agent_safety_score") is not None]
+        case_scores = [result["long_horizon_score"] for result in rows if result.get("long_horizon_score") is not None]
+        solved = sum(bool(result["solved"]) for result in rows)
+        category_summaries[category] = {
+            "attempted": len(rows), "solved": solved,
+            "solve_rate": round(100 * solved / len(rows), 2),
+            "mean_agent_safety": round(sum(safety) / len(safety), 3) if safety else None,
+            "mean_long_horizon": round(sum(case_scores) / len(case_scores), 3) if case_scores else None,
+        }
+    return category_summaries
+
+
+def build_summary(args: argparse.Namespace, seed: int, started: datetime, wall_started: float,
+                  results: list[dict[str, Any]], complete: bool) -> dict[str, Any]:
+    return {
+        "benchmark_part": "local_and_agent_safety",
+        "target_model": args.model,
+        "target_base_url": args.base_url,
+        "seed": seed,
+        "complete": complete,
+        "started_at": started.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "attempted": len(results),
+        "solved": sum(bool(result["solved"]) for result in results),
+        "total_seconds": round(time.monotonic() - wall_started, 4),
+        "category_summaries": summarize_categories(results),
+        "results": results,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_TARGET_MODEL)
@@ -874,6 +928,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-timeout", type=float, default=300.0)
     parser.add_argument("--thinking", action="store_true", help="Enable model thinking/reasoning")
     parser.add_argument("--output-dir", default="results")
+    parser.add_argument("--resume-from", help="Partial or complete report JSON; reuses finished challenges and its seed")
     parser.add_argument("--list-challenges", action="store_true")
     return parser
 
@@ -897,55 +952,37 @@ def main() -> int:
         raise ValueError("No local challenges matched the filters")
     if args.max_actions < 1:
         raise ValueError("--max-actions must be positive")
-    seed = args.seed if args.seed is not None else secrets.randbits(63)
+    prior = load_resume(args.resume_from, args.model) if args.resume_from else None
+    if prior and args.seed is not None and args.seed != prior["seed"]:
+        raise ValueError(f"--seed {args.seed} does not match resume file seed {prior['seed']}")
+    seed = prior["seed"] if prior else args.seed if args.seed is not None else secrets.randbits(63)
+    done = {result["id"]: result for result in (prior or {}).get("results", []) if result.get("status") != "error"}
     model = ChatClient(args.base_url, args.model, os.getenv(args.api_key_env), args.model_timeout,
                         thinking=args.thinking)
-    started = datetime.now(timezone.utc)
-    wall_started = time.monotonic()
+    started = datetime.fromisoformat(prior["started_at"]) if prior else datetime.now(timezone.utc)
+    wall_started = time.monotonic() - float((prior or {}).get("total_seconds") or 0)
+    stamp = started.strftime("%Y%m%dT%H%M%SZ")
+    safe_model = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.model)
+    report_kind = report_kind_for(sorted({category_for(item) for item in selected}))
+    output = Path(args.output_dir) / f"{stamp}_{safe_model}_{report_kind}.json"
+    print(f"Seed: {seed}", flush=True)
+    if done:
+        print(f"Resuming: {sum(item in done for item in selected)} of {len(selected)} challenges already done", flush=True)
     results = []
     for index, challenge_id in enumerate(selected, 1):
+        if challenge_id in done:
+            print(f"[{index}/{len(selected)}] {challenge_id} (reused)", flush=True)
+            results.append(done[challenge_id])
+            continue
         print(f"[{index}/{len(selected)}] {challenge_id}", flush=True)
         try:
             result = run_challenge(model, challenge_id, seed, args.max_actions, args.command_timeout)
         except Exception as exc:
-            prefixes = {
-                "SHELL-": "shell", "FORENSICS-": "forensics",
-                "SCODE-": "secure_code", "WEB-": "web_security",
-                "CASE-": "long_horizon",
-                "INJECT-": "agent_safety",
-            }
-            category = next(value for prefix, value in prefixes.items() if challenge_id.startswith(prefix))
-            result = {"id": challenge_id, "category": category, "status": "error", "solved": False, "total_seconds": 0.0, "model_seconds": 0.0, "command_seconds": 0.0, "actions": 0, "error": f"{type(exc).__name__}: {exc}", "events": []}
+            result = {"id": challenge_id, "category": category_for(challenge_id), "status": "error", "solved": False, "total_seconds": 0.0, "model_seconds": 0.0, "command_seconds": 0.0, "actions": 0, "error": f"{type(exc).__name__}: {exc}", "events": []}
         results.append(result)
-    category_summaries = {}
-    for category in sorted({result["category"] for result in results}):
-        rows = [result for result in results if result["category"] == category]
-        safety = [result["agent_safety_score"] for result in rows if result.get("agent_safety_score") is not None]
-        case_scores = [result["long_horizon_score"] for result in rows if result.get("long_horizon_score") is not None]
-        solved = sum(bool(result["solved"]) for result in rows)
-        category_summaries[category] = {
-            "attempted": len(rows), "solved": solved,
-            "solve_rate": round(100 * solved / len(rows), 2),
-            "mean_agent_safety": round(sum(safety) / len(safety), 3) if safety else None,
-            "mean_long_horizon": round(sum(case_scores) / len(case_scores), 3) if case_scores else None,
-        }
-    summary = {
-        "benchmark_part": "local_and_agent_safety",
-        "target_model": args.model,
-        "target_base_url": args.base_url,
-        "seed": seed,
-        "started_at": started.isoformat(),
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-        "attempted": len(results),
-        "solved": sum(bool(result["solved"]) for result in results),
-        "total_seconds": round(time.monotonic() - wall_started, 4),
-        "category_summaries": category_summaries,
-        "results": results,
-    }
-    stamp = started.strftime("%Y%m%dT%H%M%SZ")
-    safe_model = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.model)
-    report_kind = report_kind_for(sorted({result["category"] for result in results}))
-    output = Path(args.output_dir) / f"{stamp}_{safe_model}_{report_kind}.json"
+        # Save after every challenge so an interrupted run can be resumed with --resume-from.
+        secure_write_json(output, build_summary(args, seed, started, wall_started, results, complete=False))
+    summary = build_summary(args, seed, started, wall_started, results, complete=True)
     report_output = output.with_suffix(".txt")
     report = render_report(summary)
     secure_write_json(output, summary)

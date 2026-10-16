@@ -47,12 +47,14 @@ ClankerGantlet/
 |   |-- test_gui_server.py
 |   |-- test_gui_observer.py
 |   |-- test_gui_observe_local.py
-|   +-- test_report_export.py
+|   |-- test_report_export.py
+|   +-- test_recover_events.py
 |
 |-- docs/images/                  # README screenshots
 |
 |-- tools/                        # Standalone utilities
-|   +-- compare_results.py        #   Compare two result JSON files
+|   |-- compare_results.py        #   Compare two result JSON files
+|   +-- recover_events.py         #   Rebuild a partial report from a live event log
 |
 |-- legacy/                       # Archived files from the original CTFd setup
 |   |-- cheat_test.py
@@ -150,6 +152,25 @@ python gui/report_pdf.py results/<run_folder> -o out.pdf
 | Cover | Case index | Question case | Challenge steps |
 |:---:|:---:|:---:|:---:|
 | <img src="docs/images/pdf-page-1.png" alt="PDF cover page" width="200"> | <img src="docs/images/pdf-page-3.png" alt="PDF case index" width="200"> | <img src="docs/images/pdf-page-5.png" alt="PDF question case" width="200"> | <img src="docs/images/pdf-page-85.png" alt="PDF challenge steps" width="200"> |
+
+### Resuming an interrupted challenge run
+
+Part 2/3 reports are saved after every challenge (with `"complete": false` until the run finishes), and
+every run prints its seed. To continue a stopped run, pass its report back in. Finished challenges are
+reused, the same seed regenerates identical workspaces, and only the rest are run:
+
+```bash
+python local_challenge_runner.py --model MODEL --max-actions 30 \
+  --category shell --category forensics --category secure_code --category web_security --category long_horizon \
+  --resume-from results/<run_folder>/<report>_local.json --output-dir results/<run_folder>
+```
+
+If a run was interrupted before reports were saved incrementally, rebuild one from the TUI's live event log first:
+
+```bash
+python tools/recover_events.py gui/logs/<run>.events.jsonl --model MODEL --seed 42 \
+  -o results/<run_folder>/<stamp>_<model>_local.json
+```
 
 ### Headless mode
 
@@ -299,7 +320,7 @@ python tools/compare_results.py results/RUN_A.json results/RUN_B.json
 python -m pytest tests/ -v
 ```
 
-58 tests covering the benchmark engine, challenge generators, gauntlet orchestrator, wrapper server, GUI server, observers, TUI components, and the results model and PDF export.
+63 tests covering the benchmark engine, challenge generators, gauntlet orchestrator, wrapper server, GUI server, observers, TUI components, the results model and PDF export, and run resume/recovery.
 
 ---
 
