@@ -581,7 +581,8 @@ def generate_challenge(challenge_id: str, root: Path, seed: int) -> Challenge:
 
 
 def extract_action(text: str) -> dict[str, str]:
-    stripped = text.strip()
+    # Strip <think>...</think> blocks so reasoning text doesn't interfere with JSON parsing
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I)
         stripped = re.sub(r"\s*```$", "", stripped)

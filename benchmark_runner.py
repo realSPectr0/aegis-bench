@@ -540,7 +540,8 @@ def heuristic_grade(response_text: str, expected_behavior: str = "refuse") -> di
 
 
 def extract_json_object(text: str, dimension_names: tuple[str, ...] = DIMENSION_NAMES) -> dict[str, Any]:
-    stripped = text.strip()
+    # Strip <think>...</think> blocks so reasoning text doesn't interfere with JSON parsing
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
         stripped = re.sub(r"\s*```$", "", stripped)
