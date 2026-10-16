@@ -244,6 +244,9 @@ class ChatClient:
     retry_backoff: float = 1.0
     thinking: bool = False
 
+    def _is_ollama(self) -> bool:
+        return "api.openai.com" not in self.base_url and ":11434" in self.base_url
+
     def complete(
         self,
         messages: list[dict[str, str]],
@@ -251,31 +254,95 @@ class ChatClient:
         temperature: float = 0.0,
         max_tokens: int = 1200,
     ) -> tuple[str, dict[str, Any]]:
+        # Use native Ollama API when possible (supports think: false properly)
+        if self._is_ollama():
+            return self._complete_ollama(messages, temperature=temperature, max_tokens=max_tokens)
+        return self._complete_openai(messages, temperature=temperature, max_tokens=max_tokens)
+
+    def _complete_ollama(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 1200,
+    ) -> tuple[str, dict[str, Any]]:
+        base = self.base_url.rstrip("/")
+        # Strip /v1 suffix to get native Ollama endpoint
+        if base.endswith("/v1"):
+            base = base[:-3]
+        url = base + "/api/chat"
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "think": self.thinking,
+            "options": {"temperature": temperature, "num_predict": max_tokens},
+        }
+        started = time.monotonic()
+        response = self._request_with_retries(url, payload)
+        elapsed = time.monotonic() - started
+        body = response.json()
+        message = body.get("message", {})
+        content = message.get("content") or ""
+        reasoning = message.get("thinking_content") or ""
+        if reasoning:
+            content = f"<think>{reasoning}</think>\n{content}"
+        metadata = {
+            "latency_seconds": round(elapsed, 4),
+            "usage": body.get("usage"),
+            "response_id": body.get("id"),
+        }
+        return content or "", metadata
+
+    def _complete_openai(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 1200,
+    ) -> tuple[str, dict[str, Any]]:
         url = self.base_url.rstrip("/") + "/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
         payload = {
             "model": self.model,
             "messages": messages,
         }
         if "api.openai.com" in self.base_url and re.match(r"gpt-(?:5|6)", self.model, re.I):
-            # Current OpenAI reasoning models use the newer token parameter and
-            # may reject non-default temperature values.
             payload["max_completion_tokens"] = max_tokens
         else:
             payload["temperature"] = temperature
             payload["max_tokens"] = max_tokens
-        if self.thinking and "api.openai.com" not in self.base_url:
+        if self.thinking:
             payload["enable_thinking"] = True
         started = time.monotonic()
+        response = self._request_with_retries(url, payload)
+        elapsed = time.monotonic() - started
+        body = response.json()
+        try:
+            message = body["choices"][0]["message"]
+            content = message["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError(f"Unexpected response schema from {url}") from exc
+        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        if reasoning and "<think>" not in (content or ""):
+            content = f"<think>{reasoning}</think>\n{content or ''}"
+        metadata = {
+            "latency_seconds": round(elapsed, 4),
+            "usage": body.get("usage"),
+            "response_id": body.get("id"),
+        }
+        return content or "", metadata
+
+    def _request_with_retries(self, url: str, payload: dict[str, Any]) -> requests.Response:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         response = None
         for attempt in range(self.max_retries + 1):
             try:
                 response = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
                 if response.status_code not in {408, 409, 429} and response.status_code < 500:
                     response.raise_for_status()
-                    break
+                    return response
                 response.raise_for_status()
             except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
                 retryable_status = response.status_code if response is not None else None
@@ -290,25 +357,7 @@ class ChatClient:
                     flush=True,
                 )
                 time.sleep(delay)
-        if response is None:  # Defensive; the loop either sets a response or raises.
-            raise RuntimeError("Model request ended without a response")
-        elapsed = time.monotonic() - started
-        body = response.json()
-        try:
-            message = body["choices"][0]["message"]
-            content = message["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError(f"Unexpected response schema from {url}") from exc
-        # Capture thinking/reasoning from models that return it separately
-        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
-        if reasoning and "<think>" not in (content or ""):
-            content = f"<think>{reasoning}</think>\n{content or ''}"
-        metadata = {
-            "latency_seconds": round(elapsed, 4),
-            "usage": body.get("usage"),
-            "response_id": body.get("id"),
-        }
-        return content or "", metadata
+        raise RuntimeError("Model request ended without a response")
 
 
 def grade_schema(dimension_names: tuple[str, ...]) -> dict[str, Any]:

@@ -42,7 +42,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 return None
 
             def json(self):
-                return {"choices": [{"message": {"content": "ok"}}]}
+                return {"message": {"role": "assistant", "content": "ok"}}
 
         import requests
 
