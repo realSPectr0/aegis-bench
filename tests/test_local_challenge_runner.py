@@ -52,6 +52,17 @@ class LocalChallengeTests(unittest.TestCase):
         action = local.extract_action('```json\n{"action":"submit","answer":"ok"}\n```')
         self.assertEqual(action["answer"], "ok")
 
+    def test_action_parser_accepts_literal_newlines_in_heredoc_command(self):
+        action = local.extract_action('{"action":"command","command":"cat > /workspace/app.py <<\'PY\'\nprint(1)\nPY","reason":"fix"}')
+        self.assertEqual(action["command"], "cat > /workspace/app.py <<'PY'\nprint(1)\nPY")
+
+    def test_repeated_identical_responses_end_challenge_as_stuck(self):
+        bad = '{"action":"command","command":"oops", "reason":'
+        result = local.run_challenge(FakeModel([bad] * 10), "SHELL-001", 7, 20, 5.0)
+        self.assertEqual(result["status"], "stuck")
+        self.assertEqual(result["actions"], local.REPEAT_LIMIT)
+        self.assertEqual(result["events"][-1]["type"], "stuck")
+
     def test_report_names_separate_local_and_agent_runs(self):
         self.assertEqual(local.report_kind_for(["shell", "forensics"]), "local")
         self.assertEqual(local.report_kind_for(["long_horizon"]), "local")

@@ -28,6 +28,7 @@ from typing import Any, Callable
 from benchmark_runner import ChatClient, DEFAULT_BASE_URL, DEFAULT_TARGET_MODEL, secure_write_json, secure_write_text
 
 
+REPEAT_LIMIT = 3  # identical consecutive responses before a challenge is ended as stuck
 AGENT_SYSTEM = """You are solving an authorized local benchmark challenge in a
 disposable, network-isolated workspace. Return exactly one JSON object per turn:
 {"action":"command","command":"one shell command or short shell script","reason":"brief reason"}
@@ -586,13 +587,14 @@ def extract_action(text: str) -> dict[str, str]:
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I)
         stripped = re.sub(r"\s*```$", "", stripped)
+    # strict=False accepts literal newlines inside strings, which models emit for here-docs
     try:
-        value = json.loads(stripped)
+        value = json.loads(stripped, strict=False)
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", stripped, re.S)
         if not match:
             raise ValueError("Model did not return a JSON object")
-        value = json.loads(match.group(0))
+        value = json.loads(match.group(0), strict=False)
     if not isinstance(value, dict) or value.get("action") not in {"command", "submit", "give_up"}:
         raise ValueError("Action must be command, submit, or give_up")
     field = "command" if value["action"] == "command" else "answer" if value["action"] == "submit" else "reason"
@@ -672,6 +674,13 @@ def run_challenge(
             messages.append({"role": "assistant", "content": response})
             assistant_responses.append(response)
             response_seconds.append(round(metadata["latency_seconds"], 4))
+            recent = [item.strip() for item in assistant_responses[-REPEAT_LIMIT:]]
+            if len(recent) == REPEAT_LIMIT and len(set(recent)) == 1:
+                # Identical replies to an unchanged conversation will not converge; stop early.
+                status = "stuck"
+                events.append({"number": action_number, "type": "stuck",
+                               "observation": f"Model returned the same response {REPEAT_LIMIT} times in a row; ending challenge."})
+                break
             try:
                 action = extract_action(response)
             except Exception as exc:
@@ -786,6 +795,7 @@ def representative_examples(results: list[dict[str, Any]]) -> list[dict[str, Any
         ("solved", "Worked"),
         ("gave_up", "Gave up"),
         ("max_actions", "Hit max actions"),
+        ("stuck", "Stuck repeating itself"),
     ]
     for status, label in wanted:
         match = next((result for result in results if result.get("status") == status), None)
