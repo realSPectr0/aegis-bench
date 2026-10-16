@@ -242,6 +242,7 @@ class ChatClient:
     timeout: float = 300.0
     max_retries: int = 5
     retry_backoff: float = 1.0
+    thinking: bool = False
 
     def complete(
         self,
@@ -265,8 +266,7 @@ class ChatClient:
         else:
             payload["temperature"] = temperature
             payload["max_tokens"] = max_tokens
-        # Enable thinking for local models that support it (Qwen3, etc.)
-        if "api.openai.com" not in self.base_url:
+        if self.thinking and "api.openai.com" not in self.base_url:
             payload["enable_thinking"] = True
         started = time.monotonic()
         response = None

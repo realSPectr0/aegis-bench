@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     local.add_argument("--local-max-actions", type=int, default=20)
     local.add_argument("--local-command-timeout", type=float, default=10.0)
     local.add_argument("--model-timeout", type=float, default=300.0)
+    local.add_argument("--thinking", action="store_true", help="Enable model thinking/reasoning")
     return parser
 
 
@@ -88,6 +89,8 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
     ]
     if args.seed is not None:
         local_common.extend(["--seed", str(args.seed)])
+    if args.thinking:
+        local_common.append("--thinking")
     if not args.skip_local:
         command = [*local_common]
         for category in ("shell", "forensics", "secure_code", "web_security", "long_horizon"):

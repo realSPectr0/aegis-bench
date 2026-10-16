@@ -859,6 +859,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actions", type=int, default=20)
     parser.add_argument("--command-timeout", type=float, default=10.0)
     parser.add_argument("--model-timeout", type=float, default=300.0)
+    parser.add_argument("--thinking", action="store_true", help="Enable model thinking/reasoning")
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--list-challenges", action="store_true")
     return parser
@@ -884,7 +885,8 @@ def main() -> int:
     if args.max_actions < 1:
         raise ValueError("--max-actions must be positive")
     seed = args.seed if args.seed is not None else secrets.randbits(63)
-    model = ChatClient(args.base_url, args.model, os.getenv(args.api_key_env), args.model_timeout)
+    model = ChatClient(args.base_url, args.model, os.getenv(args.api_key_env), args.model_timeout,
+                        thinking=args.thinking)
     started = datetime.now(timezone.utc)
     wall_started = time.monotonic()
     results = []
