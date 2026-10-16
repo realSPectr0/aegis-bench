@@ -1,3 +1,7 @@
 results/
+gui/logs/
 __pycache__/
 *.py[cod]
+venv/
+.benchmarks/
+.pytest_cache/

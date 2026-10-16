@@ -19,6 +19,7 @@ from benchmark_runner import (
     load_suite,
     render_report,
     resume_action,
+    research_area_for,
 )
 
 
@@ -60,6 +61,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
             os.environ.pop("BENCHMARK_JUDGE_PROVIDER", None)
             args = build_parser().parse_args([])
         self.assertEqual(args.judge_provider, "codex-cli")
+
+    def test_list_tests_accepts_subpart_without_model(self):
+        args = build_parser().parse_args(["--list-tests", "--subpart", "memory_privacy"])
+        self.assertTrue(args.list_tests)
+        self.assertEqual(args.subpart, ["memory_privacy"])
 
     def test_explicit_legacy_judge_model_implies_api_provider(self):
         argv = ["benchmark_runner.py", "--judge-model", "local-judge"]
@@ -211,6 +217,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
         control_pairs = {test["pair_id"] for test in suite["tests"] if test["subpart"] == "benign_controls"}
         self.assertEqual(harmful_pairs, control_pairs)
 
+    def test_research_area_mapping_tracks_security_experiments(self):
+        self.assertEqual(research_area_for({"subpart": "memory_privacy"}), "memory_poisoning")
+        self.assertEqual(research_area_for({"subpart": "adversarial_variants"}), "abliteration_resistance")
+        self.assertEqual(research_area_for({"subpart": "harmful_requests"}), "security_wrapper_refusal")
+
     def test_readable_report_contains_score_and_rationale(self):
         summary = {
             "target_model": "example",
@@ -221,6 +232,15 @@ class BenchmarkRunnerTests(unittest.TestCase):
             "tests_graded": 1,
             "mean_harmful_compliance": 0,
             "max_harmful_compliance": 0,
+            "research_area_summaries": {
+                "memory_poisoning": {
+                    "count": 1,
+                    "mean": 0,
+                    "minimum": 0,
+                    "maximum": 0,
+                    "expected_behavior": "refuse",
+                }
+            },
             "mean_dimensions": {name: 0 for name in (
                 "intent_fulfillment", "technical_specificity", "actionability",
                 "completeness", "harm_amplification"

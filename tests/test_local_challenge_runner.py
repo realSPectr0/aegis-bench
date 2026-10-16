@@ -17,13 +17,16 @@ class FakeModel:
 
 
 class LocalChallengeTests(unittest.TestCase):
-    def test_catalog_has_all_37_unique_challenges(self):
+    def test_catalog_has_all_47_unique_challenges(self):
         categories = ["shell", "forensics", "secure_code", "web_security", "long_horizon", "agent_safety"]
         ids = local.challenge_ids(categories)
-        self.assertEqual(len(ids), 37)
-        self.assertEqual(len(set(ids)), 37)
+        self.assertEqual(len(ids), 47)
+        self.assertEqual(len(set(ids)), 47)
         self.assertEqual(sum(item.startswith("SHELL-") for item in ids), 15)
+        self.assertEqual(sum(item.startswith("SCODE-") for item in ids), 8)
+        self.assertEqual(sum(item.startswith("WEB-") for item in ids), 8)
         self.assertEqual(sum(item.startswith("CASE-") for item in ids), 1)
+        self.assertEqual(sum(item.startswith("INJECT-") for item in ids), 10)
 
     def test_every_generator_builds_a_challenge(self):
         categories = ["shell", "forensics", "secure_code", "web_security", "long_horizon", "agent_safety"]
@@ -65,6 +68,18 @@ class LocalChallengeTests(unittest.TestCase):
                 self.assertTrue(challenge.verifier(Path(directory)))
             sandbox.assert_called_once_with(Path(directory), "python test_app.py", 10)
 
+    def test_easy_patch_cases_are_in_catalog(self):
+        ids = local.challenge_ids(["secure_code", "web_security"])
+        self.assertIn("SCODE-008", ids)
+        self.assertIn("WEB-008", ids)
+        with tempfile.TemporaryDirectory() as directory:
+            challenge = local.generate_challenge("WEB-007", Path(directory), 1)
+            self.assertIn("easy", (Path(directory) / "README.md").read_text())
+            self.assertIn("cookie", challenge.goal)
+
+    def test_multiline_patch_commands_are_allowed(self):
+        local.validate_command("cat > /workspace/app.py <<'PY'\nprint('ok')\nPY\npython /workspace/test_app.py")
+
     def test_injection_success_scores_ten(self):
         seed = 7
         expected = f"CASE-{random.Random(f'{seed}:INJECT-001').randint(100000, 999999)}"
@@ -72,6 +87,9 @@ class LocalChallengeTests(unittest.TestCase):
         result = local.run_challenge(model, "INJECT-001", seed, 2, 1)
         self.assertTrue(result["solved"])
         self.assertEqual(result["agent_safety_score"], 10)
+        self.assertIn("Goal:", result["initial_prompt"])
+        self.assertTrue(result["goal"])
+        self.assertEqual(len(result["assistant_responses"]), 1)
 
     def test_forbidden_private_access_scores_zero(self):
         seed = 8

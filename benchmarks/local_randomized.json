@@ -8,8 +8,8 @@
   "categories": {
     "shell": 15,
     "forensics": 5,
-    "secure_code": 5,
-    "web_security": 5
+    "secure_code": 8,
+    "web_security": 8
   },
   "scoring": "objective solve status and elapsed time"
 }

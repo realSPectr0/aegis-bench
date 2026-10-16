@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Clanker Gauntlet | Benchmark Lab</title><link rel="stylesheet" href="/style.css"><script src="/lucide.js" defer></script><script src="/app.js" defer></script></head>
+<body>
+<aside class="sidebar">
+ <a class="brand" href="/"><span class="brand-icon"><i data-lucide="scan-face"></i></span><span>CLANKER<span class="brand-sub">GAUNTLET</span></span></a>
+ <div class="workspace-label">WORKSPACE <span>LOCAL</span></div>
+ <nav><button class="nav active" data-view="overview"><i data-lucide="layout-dashboard"></i>Overview</button><button class="nav" data-view="runs"><i data-lucide="layers-2"></i>Run history<span id="history-count" class="count">0</span></button><button class="nav" data-view="compare"><i data-lucide="git-compare-arrows"></i>Compare</button></nav>
+ <div class="sidebar-bottom"><div class="lab-mark"><i data-lucide="fingerprint"></i><span>SECURITY RESEARCH LAB</span></div><div id="ollama-status" class="connection"><span class="dot"></span>Checking Ollama</div><div class="local-note">127.0.0.1 <span>LOCAL INSTANCE</span></div></div>
+</aside>
+<main>
+ <header class="topbar"><div class="crumb">Workspace <span>/</span> <b id="breadcrumb">Overview</b></div><div class="topright"><span class="quiet"><span class="dot mint"></span> Local environment</span><button class="icon-button" id="refresh" title="Refresh results" aria-label="Refresh results"><i data-lucide="refresh-cw"></i></button><span class="avatar">CG</span></div></header>
+ <div class="page">
+ <section id="overview" class="view">
+  <div class="page-heading"><div><div class="eyebrow">BENCHMARK CONTROL CENTER</div><h1>Clanker Gauntlet<span class="version">LAB / 01</span></h1><p>Model behavior. Security boundaries. Measurable results.</p></div><button class="primary" id="new-run"><i data-lucide="plus"></i>New run</button></div>
+  <div class="metrics" id="summary-metrics"></div>
+  <div class="workspace-grid">
+   <section class="configuration"><div class="section-heading"><h2><i data-lucide="sliders-horizontal"></i>Run configuration</h2><span class="mono">01 / SETUP</span></div>
+    <form id="run-form">
+     <label>Target stack</label><div class="segmented" id="stack"><button type="button" data-stack="llamacpp" class="selected">llama.cpp</button><button type="button" data-stack="ollama">Ollama</button><button type="button" data-stack="pentestgpt">PentestGPT</button><button type="button" data-stack="cai">CAI adapter</button></div>
+     <label for="model">Target model</label><div class="input-icon"><i data-lucide="box"></i><input id="model" list="model-list" value="cyber-tiel-coder" required autocomplete="off"><datalist id="model-list"></datalist></div>
+     <label for="endpoint">API endpoint</label><input id="endpoint" type="url" value="http://127.0.0.1:8080/v1" required>
+     <div class="field-grid"><div><label for="judge">Codex judge model</label><input id="judge" placeholder="Configured default"></div><div><label for="seed">Seed</label><input id="seed" type="number" value="42" required></div></div>
+     <div class="field-grid"><div><label for="actions">Max actions / task</label><input id="actions" type="number" min="1" max="200" value="30" required></div><div class="judge-tag"><i data-lucide="badge-check"></i><span>Independent grading<span>Codex CLI + local verifiers</span></span></div></div>
+     <label>Benchmark parts</label><div class="part-options">
+      <label class="part-option"><input type="checkbox" name="parts" value="questions" checked><span class="part-number">01</span><span>Safety questions<small>Refusal, utility & memory</small></span><i data-lucide="message-square"></i></label>
+      <label class="part-option"><input type="checkbox" name="parts" value="local" checked><span class="part-number">02</span><span>Local challenges<small>Shell, forensics & secure code</small></span><i data-lucide="terminal"></i></label>
+      <label class="part-option"><input type="checkbox" name="parts" value="agent-safety" checked><span class="part-number">03</span><span>Agent safety<small>Indirect prompt injection</small></span><i data-lucide="shield-check"></i></label>
+     </div><div id="adapter-note" class="inline-note" hidden>CAI-style prompt adapter; the wrapper server must already be running.</div>
+     <div class="form-footer"><span><i data-lucide="lock-keyhole"></i>Isolated local tasks</span><button type="submit" class="primary" id="launch"><i data-lucide="play"></i>Launch benchmark</button></div>
+    </form>
+   </section>
+   <section class="activity"><div class="section-heading"><h2><i data-lucide="radio"></i>Live activity</h2><span class="status-pill" id="run-status">IDLE</span></div><div class="activity-top"><div><span class="eyebrow">CURRENT RUN</span><h3 id="active-model">Ready when you are</h3><span id="active-detail" class="muted">No benchmark launched in this session</span></div><button id="stop" class="icon-button danger" title="Stop benchmark" aria-label="Stop benchmark" disabled><i data-lucide="square"></i></button></div>
+    <div class="stages"><div id="stage-questions"><span>01</span>Questions<i data-lucide="minus"></i></div><div id="stage-local"><span>02</span>Challenges<i data-lucide="minus"></i></div><div id="stage-agent"><span>03</span>Agent safety<i data-lucide="minus"></i></div></div>
+    <div class="terminal-header"><span><span class="terminal-dot"></span> OUTPUT STREAM</span><button class="icon-button" id="copy-log" title="Copy output" aria-label="Copy output"><i data-lucide="copy"></i></button></div><pre id="terminal"><span class="terminal-muted">Waiting for a benchmark run...</span></pre>
+    <div class="activity-footer"><span><span class="dot mint"></span><span id="stream-status">Stream ready</span></span><span class="mono" id="elapsed">00:00</span></div>
+   </section>
+  </div>
+  <section class="model-section"><div class="section-heading"><h2><i data-lucide="cpu"></i>Loaded models</h2><span class="mono">OLLAMA / MEMORY</span></div><div id="loaded-models" class="loaded-models"><span class="muted">Connecting...</span></div></section>
+  <section class="report-section"><div class="section-heading"><h2>Recent results</h2><button class="text-button" id="all-runs">View all runs<i data-lucide="arrow-up-right"></i></button></div><div id="recent-table"></div></section>
+ </section>
+ <section id="runs" class="view" hidden><div class="page-heading"><div><div class="eyebrow">EXPERIMENT ARCHIVE</div><h1>Run history</h1><p>Every saved report, across models and benchmark parts.</p></div></div><div class="filter-bar"><div class="input-icon"><i data-lucide="search"></i><input id="search" placeholder="Search models or reports" aria-label="Search reports"></div><select id="part-filter" aria-label="Filter part"><option value="">All parts</option><option>Safety questions</option><option>Local challenges</option><option>Agent safety</option></select></div><div id="history-table"></div></section>
+ <section id="compare" class="view" hidden><div class="page-heading"><div><div class="eyebrow">SIDE BY SIDE</div><h1>Compare results</h1><p>Compare saved reports from the same benchmark part.</p></div></div><div class="compare-selectors"><div><label for="compare-a">BASELINE</label><select id="compare-a"></select></div><i data-lucide="arrow-right-left"></i><div><label for="compare-b">CANDIDATE</label><select id="compare-b"></select></div></div><div id="comparison"></div></section>
+ <footer>CLANKER GAUNTLET<span>LOCAL BENCHMARK WORKSPACE <span class="dot mint"></span></span></footer>
+ </div>
+</main>
+<dialog id="detail"><div class="dialog-header"><div><span class="eyebrow" id="detail-part"></span><h2 id="detail-title"></h2></div><button class="icon-button" id="close-detail" title="Close report" aria-label="Close report"><i data-lucide="x"></i></button></div><div id="detail-metrics"></div><div id="detail-results"></div><div class="dialog-footer"><a id="download" class="text-button" download><i data-lucide="download"></i>Download JSON</a><span class="muted" id="detail-count"></span></div></dialog>
+<div id="toast" role="status" hidden></div>
+</body></html>
