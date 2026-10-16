@@ -4,6 +4,7 @@ import argparse
 import curses
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -704,7 +705,7 @@ class ControlPanel(Terminal):
         visible = wrapped[start:start + height]
         for row, line in enumerate(visible, y):
             is_key = line.startswith(('JUDGE', 'TARGET', 'QUESTION', 'SCORE', 'CHALLENGE',
-                                      'SANDBOX', 'PROMPT', 'MODEL', 'ERROR'))
+                                      'SANDBOX', 'PROMPT', 'MODEL', 'ERROR', 'THINKING'))
             self.put(row, x, line[:width], C_LOG_KEY if is_key else C_DIM)
         # Show follow indicator
         if not self.follow.get(area, False) and len(wrapped) > height:
@@ -728,7 +729,16 @@ class ControlPanel(Terminal):
             elif kind == 'machine_prompt':
                 lines += ['PROMPT TO MODEL:', event['text']]
             elif kind == 'machine_response':
-                lines += ['MODEL ACTION:', event['text']]
+                text = event['text']
+                think_match = re.search(r'<think>(.*?)</think>', text, re.S)
+                if think_match:
+                    thinking = think_match.group(1).strip()
+                    action_text = text[think_match.end():].strip()
+                    lines += ['MODEL THINKING:']
+                    lines += thinking.split('\n')
+                    lines += ['', 'MODEL ACTION:', action_text]
+                else:
+                    lines += ['MODEL ACTION:', text]
             elif kind == 'machine_command':
                 lines += [f'SANDBOX COMMAND ({event["source"]}):', f'$ {event["command"]}']
             elif kind == 'machine_result':
@@ -753,99 +763,90 @@ class ControlPanel(Terminal):
             '| (__ | |/ _` || \' \\ | / // -_)| \'_|  ',
             ' \\___||_|\\__,_||_||_||_\\_\\\\___||_|    ',
         ]
-        # Center the logo area
-        cx = max(2, (w - 70) // 2)
+        cx = max(2, (w - 76) // 2)
         top = 5
         for i, line in enumerate(logo):
             self.put(top + i, cx + 1, line, C_ACCENT, True)
         self.put(top + 4, cx + 1, 'G A U N T L E T', C_TITLE, True)
         self.put(top + 5, cx + 1, 'LLM Security Benchmark Framework', C_DIM)
-        self.put(top + 6, cx + 1, 'v2.0', C_DIM)
 
-        # --- Left column: System Status card ---
-        card_top = top + 9
-        card_w = min(36, (w - cx - 4) // 2)
-        card_h = min(h - card_top - 6, 14)
-        self.box(card_top, cx, card_h, card_w, 'System Status')
+        # --- Full-width benchmark overview ---
+        card_top = top + 8
+        total_w = min(76, w - cx - 2)
+        left_w = max(30, total_w // 2)
+        right_w = total_w - left_w - 2
+        card_h = 18 if h > 42 else min(h - card_top - 10, 15)
 
-        # Ollama status
+        # Left card: System Status
+        self.box(card_top, cx, card_h, left_w, 'System Status')
         ollama_ok = len(self.models) > 0
-        ollama_sym = SYM_CHECK if ollama_ok else SYM_CROSS
-        ollama_col = C_SUCCESS if ollama_ok else C_ERROR
-        self.put(card_top + 2, cx + 3, f'{ollama_sym} Ollama', ollama_col)
-        if ollama_ok:
-            self.put(card_top + 2, cx + 15, f'{len(self.models)} models', C_DIM)
-        else:
-            self.put(card_top + 2, cx + 15, 'offline', C_DIM)
+        self.put(card_top + 2, cx + 3, f'{SYM_CHECK if ollama_ok else SYM_CROSS} Ollama',
+                 C_SUCCESS if ollama_ok else C_ERROR)
+        self.put(card_top + 2, cx + 16, f'{len(self.models)} models' if ollama_ok else 'offline', C_DIM)
 
-        # Loaded models
         loaded_count = len(self.loaded)
-        self.put(card_top + 3, cx + 3, f'{SYM_DOT} Loaded', C_FIELD_LBL)
-        self.put(card_top + 3, cx + 15, f'{loaded_count} model{"s" if loaded_count != 1 else ""} in VRAM', C_DIM)
-
-        # Show loaded model names (up to 3)
+        self.put(card_top + 3, cx + 3, f'{SYM_DOT} VRAM', C_FIELD_LBL)
+        self.put(card_top + 3, cx + 16, f'{loaded_count} loaded', C_DIM)
         for i, model in enumerate(self.loaded[:3]):
-            if card_top + 4 + i < card_top + card_h - 2:
-                name = model['name']
+            if card_top + 4 + i < card_top + card_h - 3:
                 mem = f'{model["size"]/1024**3:.1f}G'
-                self.put(card_top + 4 + i, cx + 5, f'{name[:card_w - 16]}', C_FIELD_VAL)
-                self.put(card_top + 4 + i, cx + card_w - len(mem) - 3, mem, C_DIM)
+                self.put(card_top + 4 + i, cx + 5, model['name'][:left_w - 16], C_FIELD_VAL)
+                self.put(card_top + 4 + i, cx + left_w - len(mem) - 3, mem, C_DIM)
 
-        # Benchmark status
         status = self.active_status()
-        row_s = min(card_top + 4 + min(len(self.loaded), 3) + 1, card_top + card_h - 3)
-        self.hline(row_s - 1, cx + 2, card_w - 4)
-        status_sym = {
-            'RUNNING': (SYM_RUNNING, C_STATUS_RUN),
-            'COMPLETE': (SYM_CHECK, C_STATUS_OK),
-            'FAILED': (SYM_CROSS, C_ERROR),
-            'STOPPED': (SYM_DASH, C_WARN),
-            'IDLE': (SYM_IDLE, C_DIM),
+        row_s = min(card_top + 4 + min(loaded_count, 3) + 1, card_top + card_h - 3)
+        self.hline(row_s - 1, cx + 2, left_w - 4)
+        sym, sc = {
+            'RUNNING': (SYM_RUNNING, C_STATUS_RUN), 'COMPLETE': (SYM_CHECK, C_STATUS_OK),
+            'FAILED': (SYM_CROSS, C_ERROR), 'STOPPED': (SYM_DASH, C_WARN),
         }.get(status, (SYM_IDLE, C_DIM))
         if row_s < card_top + card_h - 1:
-            self.put(row_s, cx + 3, f'{status_sym[0]} Benchmark', status_sym[1])
-            self.put(row_s, cx + 15, status.lower(), C_DIM)
+            self.put(row_s, cx + 3, f'{sym} Benchmark {status.lower()}', sc)
+        if self.rows and row_s + 1 < card_top + card_h - 1:
+            self.put(row_s + 1, cx + 3, f'{len(self.rows)} reports saved', C_DIM)
 
-        # --- Right column: Quick Stats card ---
-        stats_x = cx + card_w + 2
-        stats_w = min(36, w - stats_x - 2)
-        if stats_w >= 20:
-            self.box(card_top, stats_x, card_h, stats_w, 'Quick Stats')
-            self.put(card_top + 2, stats_x + 3, f'{SYM_DOT} Reports', C_FIELD_LBL)
-            self.put(card_top + 2, stats_x + 15, str(len(self.rows)), C_FIELD_VAL)
-            self.put(card_top + 3, stats_x + 3, f'{SYM_DOT} Runs', C_FIELD_LBL)
-            self.put(card_top + 3, stats_x + 15, str(len(self.groups)), C_FIELD_VAL)
+        # Right card: What's in the benchmark
+        rx = cx + left_w + 2
+        if right_w >= 24:
+            self.box(card_top, rx, card_h, right_w, 'The Benchmark')
+            ry = card_top + 2
+            self.put(ry, rx + 3, '91 total test cases', C_FIELD_VAL)
+            ry += 1
+            self.hline(ry, rx + 2, right_w - 4)
+            ry += 1
 
-            # Count parts across reports
-            parts_count = {}
-            for row in self.rows:
-                parts_count[row['part']] = parts_count.get(row['part'], 0) + 1
-            row_y = card_top + 5
-            self.hline(card_top + 4, stats_x + 2, stats_w - 4)
-            for part_name, count in sorted(parts_count.items()):
-                if row_y < card_top + card_h - 3:
-                    self.put(row_y, stats_x + 3, f'{part_name[:stats_w - 12]}', C_DIM)
-                    self.put(row_y, stats_x + stats_w - len(str(count)) - 3, str(count), C_FIELD_VAL)
-                    row_y += 1
+            parts = [
+                ('Part 1: Safety', [
+                    ('harmful requests',   '22'),
+                    ('benign controls',    '14'),
+                    ('bounded dual-use',    '8'),
+                ]),
+                ('Part 2: Local', [
+                    ('shell',              '15'),
+                    ('forensics',           '5'),
+                    ('secure code',         '8'),
+                    ('web security',        '8'),
+                    ('incident response',   '1'),
+                ]),
+                ('Part 3: Agent', [
+                    ('prompt injection',   '10'),
+                ]),
+            ]
+            for title, items in parts:
+                if ry >= card_top + card_h - 1:
+                    break
+                self.put(ry, rx + 3, title, C_ACCENT)
+                ry += 1
+                for label, count in items:
+                    if ry >= card_top + card_h - 1:
+                        break
+                    self.put(ry, rx + 5, label, C_DIM)
+                    self.put(ry, rx + right_w - len(count) - 3, count, C_FIELD_VAL)
+                    ry += 1
 
-            # Last run info
-            if self.rows:
-                self.hline(row_y, stats_x + 2, stats_w - 4)
-                row_y += 1
-                if row_y < card_top + card_h - 1:
-                    last = self.rows[0]
-                    self.put(row_y, stats_x + 3, 'Last run:', C_FIELD_LBL)
-                    row_y += 1
-                if row_y < card_top + card_h - 1:
-                    self.put(row_y, stats_x + 3, f'{last["model"][:stats_w - 6]}', C_FIELD_VAL)
-                    row_y += 1
-                if row_y < card_top + card_h - 1:
-                    self.put(row_y, stats_x + 3, f'{last["date"][:10]}', C_DIM)
-
-        # --- Navigation menu below cards ---
+        # Navigation menu
         menu_top = card_top + card_h + 1
         if menu_top + 5 < h - 4:
-            menu_x = cx
             items = [
                 ('F1', 'New Benchmark',  'Configure and launch a run'),
                 ('F2', 'View Results',   f'{len(self.rows)} saved reports'),
@@ -856,11 +857,10 @@ class ControlPanel(Terminal):
                 sel = i == self.cursor
                 prefix = f' {SYM_ARROW} ' if sel else '   '
                 text = f'{prefix}[{key}]  {label:<18} {hint}'
-                row_w = min(58, w - menu_x - 2)
-                self.selected_row(menu_top + i, menu_x, text, row_w, sel)
-                self.hits.append((menu_top + i, menu_x, 1, row_w, 'home', i))
+                row_w = min(60, w - cx - 2)
+                self.selected_row(menu_top + i, cx, text, row_w, sel)
+                self.hits.append((menu_top + i, cx, 1, row_w, 'home', i))
 
-        # Tagline at bottom
         if menu_top + 7 < h - 4:
             tagline = f'Local-first {SYM_DOT} Reproducible {SYM_DOT} Research-grade'
             self.put(menu_top + 6, max(2, (w - len(tagline)) // 2), tagline, C_DIM)
