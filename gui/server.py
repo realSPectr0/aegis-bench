@@ -71,6 +71,22 @@ def reports():
     return sorted(rows, key=lambda row: row['mtime'], reverse=True)
 
 
+def run_rows(relative):
+    """All part reports belonging to the same run as the given report."""
+    folder = report_path(relative).parent
+    if folder == RESULTS.resolve():
+        return [row for row in reports() if row['path'] == relative]
+    return [row for row in reports() if (RESULTS / row['path']).resolve().parent == folder]
+
+
+def export_pdf(relative):
+    import report_pdf
+    rows = run_rows(relative)
+    if not rows:
+        raise ValueError('Report not found')
+    return report_pdf.export_rows(rows, report_path)
+
+
 def launch(config):
     global ACTIVE
     model = str(config.get('model', '')).strip()
@@ -159,6 +175,9 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/report':
                 path = report_path(parse_qs(parsed.query).get('path', [''])[0])
                 return self.send(path.read_bytes(), mime='application/json' if path.suffix == '.json' else 'text/plain; charset=utf-8')
+            if parsed.path == '/api/report.pdf':
+                path = export_pdf(parse_qs(parsed.query).get('path', [''])[0])
+                return self.send(path.read_bytes(), mime='application/pdf')
             if parsed.path == '/api/status':
                 active = ACTIVE
                 value = None

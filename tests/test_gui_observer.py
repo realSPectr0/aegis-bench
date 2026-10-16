@@ -14,6 +14,19 @@ from cli import ControlPanel
 
 
 class ObserverTests(unittest.TestCase):
+    def test_stream_scroll_disables_and_restores_follow(self):
+        ui = ControlPanel.__new__(ControlPanel)
+        ui.scroll = {'output': 0}
+        ui.follow = {'output': True}
+
+        ui.scroll_stream('output', down=False, step=3)
+        self.assertEqual(ui.scroll['output'], 3)
+        self.assertFalse(ui.follow['output'])
+
+        ui.scroll_stream('output', down=True, step=3)
+        self.assertEqual(ui.scroll['output'], 0)
+        self.assertTrue(ui.follow['output'])
+
     def test_codex_catalog_filters_hidden_models_and_preserves_ids(self):
         rows = codex_models.normalize([
             {'model': 'visible-model', 'displayName': 'Visible Model'},
@@ -60,6 +73,7 @@ class ObserverTests(unittest.TestCase):
 
     def test_results_page_groups_parts_and_marks_missing_reports(self):
         ui = ControlPanel.__new__(ControlPanel)
+        ui.screen = type('Screen', (), {'getmaxyx': lambda self: (40, 120)})()
         ui.rows = [{'path': 'run/a.json', 'part': 'Safety questions', 'model': 'qwen', 'date': '2026-10-15', 'metrics': []},
                    {'path': 'run/b.json', 'part': 'Agent safety', 'model': 'qwen', 'date': '2026-10-15', 'metrics': []}]
         ui.build_groups()
@@ -76,8 +90,10 @@ class ObserverTests(unittest.TestCase):
         self.assertIn('LOCAL CHALLENGES', content)
         self.assertIn('AGENT SAFETY', content)
         self.assertIn('No saved report for this part', content)
-        scores = [entry.get('score_str', '') for entry in ui.page_detail if isinstance(entry, dict) and entry.get('kind') == 'case']
+        scores = [entry['case']['result'] for entry in ui.page_detail if entry.get('kind') == 'case']
         self.assertIn('9/10', scores)
+        self.assertIn('Useful', content)
+        self.assertEqual(len(ui.case_offsets), 2)
 
 
 if __name__ == '__main__':

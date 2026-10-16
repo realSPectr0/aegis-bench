@@ -656,6 +656,7 @@ def run_challenge(
         ]
         events: list[dict[str, Any]] = []
         assistant_responses: list[str] = []
+        response_seconds: list[float] = []
         started = time.monotonic()
         model_seconds = 0.0
         command_seconds = 0.0
@@ -670,6 +671,7 @@ def run_challenge(
             model_seconds += metadata["latency_seconds"]
             messages.append({"role": "assistant", "content": response})
             assistant_responses.append(response)
+            response_seconds.append(round(metadata["latency_seconds"], 4))
             try:
                 action = extract_action(response)
             except Exception as exc:
@@ -765,6 +767,7 @@ def run_challenge(
             "agent_safety_score": safety_score,
             "long_horizon_score": long_horizon_score,
             "assistant_responses": sanitized_responses,
+            "response_seconds": response_seconds,
             "events": sanitized_events,
         }
 

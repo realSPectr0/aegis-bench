@@ -1,0 +1,175 @@
+"""Normalize saved benchmark reports into readable per-case records.
+
+Shared by the TUI results view and the PDF exporter so both present the same
+question / thinking / answer / judge / timing breakdown.
+"""
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+THINK = re.compile(r'<think>(.*?)(?:</think>|$)', re.S)
+PART_ORDER = ('Safety questions', 'Local challenges', 'Agent safety')
+SCORE_SEP = '\u00b7'
+
+
+def clean_text(value):
+    """Drop control characters (keeping newlines) so text renders cleanly."""
+    text = str(value or '').replace('\r\n', '\n').replace('\t', '    ')
+    return ''.join(char for char in text if char == '\n' or char.isprintable())
+
+
+def split_thinking(text):
+    """Return (thinking, answer) from a response that may embed <think> blocks."""
+    text = text or ''
+    thinking = '\n\n'.join(block.strip() for block in THINK.findall(text) if block.strip())
+    answer = THINK.sub('', text).strip()
+    return thinking, answer
+
+
+def title(value):
+    return str(value or 'other').replace('_', ' ').title()
+
+
+def seconds(value):
+    if value is None:
+        return 'n/a'
+    value = float(value)
+    if value < 60:
+        return f'{value:.1f}s'
+    minutes, rest = divmod(value, 60)
+    if minutes < 60:
+        return f'{int(minutes)}m {rest:.0f}s'
+    hours, minutes = divmod(minutes, 60)
+    return f'{int(hours)}h {int(minutes)}m'
+
+
+def question_case(case):
+    """Part 1 case: alternating user/assistant transcript plus a judge grade."""
+    transcript = case.get('transcript') or []
+    calls = case.get('calls') or []
+    turns, answer_index = [], 0
+    for message in transcript:
+        if message.get('role') == 'user':
+            turns.append({'question': message.get('content', ''), 'thinking': '', 'answer': '',
+                          'seconds': None, 'tokens': None})
+        elif message.get('role') == 'assistant':
+            if not turns:
+                turns.append({'question': '', 'thinking': '', 'answer': '', 'seconds': None, 'tokens': None})
+            thinking, answer = split_thinking(message.get('content'))
+            call = calls[answer_index] if answer_index < len(calls) else {}
+            answer_index += 1
+            turns[-1].update(thinking=thinking, answer=answer, seconds=call.get('latency_seconds'),
+                             tokens=(call.get('usage') or {}).get('completion_tokens'))
+    if not turns and case.get('turns'):
+        turns = [{'question': str(turn), 'thinking': '', 'answer': '', 'seconds': None, 'tokens': None}
+                 for turn in case['turns']]
+
+    grade = case.get('grade') or None
+    judge = None
+    if grade:
+        meta = grade.get('judge_metadata') or {}
+        judge = {'score': grade.get('score'), 'label': grade.get('label', ''),
+                 'confidence': grade.get('confidence'), 'rationale': grade.get('rationale', ''),
+                 'safety_behavior': grade.get('safety_behavior', ''),
+                 'dimensions': grade.get('dimensions') or {}, 'grader': grade.get('grader', ''),
+                 'seconds': meta.get('latency_seconds')}
+    model_seconds = sum(turn['seconds'] or 0 for turn in turns) if any(t['seconds'] for t in turns) else None
+    expected = case.get('expected_behavior', '')
+    score = grade.get('score') if grade else None
+    return {
+        'id': case.get('id', '?'), 'section': case.get('research_area') or case.get('category') or expected,
+        'kind': 'question', 'expected': expected,
+        'direction': 'lower' if expected == 'refuse' else 'higher',
+        'score': score, 'result': f'{score}/10' if score is not None else ('error' if case.get('error') else 'ungraded'),
+        'label': judge['label'] if judge else '', 'judge': judge, 'turns': turns, 'steps': [],
+        'goal': '', 'error': case.get('error', ''),
+        'tags': [value for value in (case.get('subpart'), case.get('category'), case.get('variant')) if value],
+        'model_seconds': model_seconds,
+        'total_seconds': (model_seconds or 0) + ((judge or {}).get('seconds') or 0) or None,
+    }
+
+
+def challenge_case(case):
+    """Part 2/3 case: an agent loop of model actions and sandbox observations."""
+    responses = case.get('assistant_responses') or []
+    timings = case.get('response_seconds') or []
+    events = case.get('events') or []
+    steps = []
+    for index in range(max(len(responses), len(events))):
+        thinking, raw = split_thinking(responses[index]) if index < len(responses) else ('', '')
+        event = events[index] if index < len(events) else {}
+        try:
+            action = json.loads(raw)
+        except (TypeError, ValueError):
+            action = {}
+        kind = event.get('type') or action.get('action') or 'response'
+        if kind == 'submit':
+            outcome = 'Correct' if event.get('correct') else 'Incorrect'
+            if isinstance(event.get('score'), dict) and event['score'].get('score') is not None:
+                outcome += f' (score {event["score"]["score"]}/10)'
+        else:
+            outcome = event.get('observation', '')
+        steps.append({'number': event.get('number', index + 1), 'type': kind, 'thinking': thinking,
+                      'reason': action.get('reason', '') if isinstance(action, dict) else '',
+                      'command': event.get('command') or (action.get('command') if isinstance(action, dict) else ''),
+                      'answer': action.get('answer', '') if isinstance(action, dict) else '',
+                      'raw': raw if not action else '', 'outcome': outcome,
+                      'model_seconds': timings[index] if index < len(timings) else None,
+                      'command_seconds': event.get('seconds')})
+    status = case.get('status', 'unknown')
+    score = case.get('agent_safety_score')
+    if score is None:
+        score = case.get('long_horizon_score')
+    flags = []
+    if case.get('injection_followed'):
+        flags.append('followed injection')
+    if case.get('forbidden_access'):
+        flags.append('accessed forbidden data')
+    return {
+        'id': case.get('id', '?'), 'section': case.get('category', 'other'), 'kind': 'challenge',
+        'expected': '', 'direction': 'higher', 'score': score,
+        'result': status.replace('_', ' ') + (f' {SCORE_SEP} {score}/10' if score is not None else ''),
+        'label': ', '.join(flags), 'judge': None, 'goal': case.get('goal', ''),
+        'prompt': case.get('initial_prompt', ''), 'turns': [], 'steps': steps,
+        'error': case.get('error', ''), 'tags': [f'{case.get("actions", len(steps))} actions'],
+        'solved': case.get('solved'), 'model_seconds': case.get('model_seconds'),
+        'command_seconds': case.get('command_seconds'), 'total_seconds': case.get('total_seconds'),
+    }
+
+
+def load_part(path, part):
+    data = json.loads(Path(path).read_text())
+    builder = question_case if part == 'Safety questions' else challenge_case
+    cases = [builder(case) for case in data.get('results', [])]
+    sections = {}
+    for case in cases:
+        sections.setdefault(case['section'], []).append(case)
+    started, finished = data.get('started_at'), data.get('finished_at')
+    return {'part': part, 'path': str(path), 'data': data, 'cases': cases, 'sections': sections,
+            'total_seconds': data.get('total_seconds') or elapsed(started, finished),
+            'judge': ' / '.join(v for v in (data.get('judge_provider'), data.get('judge_model')) if v)}
+
+
+def elapsed(started, finished):
+    try:
+        return (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def load_run(rows, resolve):
+    """Build a run from server.reports() rows; resolve maps a row path to a file."""
+    parts = []
+    for name in PART_ORDER:
+        for row in rows:
+            if row['part'] == name:
+                part = load_part(resolve(row['path']), name)
+                part['metrics'] = row.get('metrics', [])
+                parts.append(part)
+    first = parts[0]['data'] if parts else {}
+    seed = next((p['data']['seed'] for p in parts if p['data'].get('seed') is not None), None)
+    return {'model': rows[0]['model'] if rows else 'Unknown', 'date': min(r['date'] for r in rows) if rows else '',
+            'endpoint': first.get('target_base_url', ''), 'seed': seed,
+            'judge': next((p['judge'] for p in parts if p['judge']), ''), 'parts': parts,
+            'total_seconds': sum(p['total_seconds'] or 0 for p in parts) or None}

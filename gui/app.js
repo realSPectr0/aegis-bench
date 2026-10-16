@@ -100,7 +100,7 @@ async function openReport(path) {
   $('detail-part').textContent=report?.part||'REPORT';$('detail-title').textContent=data.target_model||'Benchmark report';
   $('detail-metrics').innerHTML=(report?.metrics||[]).map(m=>`<div class="detail-metric"><span>${escapeHTML(title(m.name))}</span><b>${m.value}${m.unit}</b></div>`).join('');
   $('detail-results').innerHTML=(data.results||[]).map(r=>{const status=r.grade?`${r.grade.score}/10`:(r.status||'unknown');const content=r.grade?{grade:r.grade,transcript:r.transcript}:r;return `<details class="result-row"><summary><span>${escapeHTML(r.id)}</span><span class="pill">${escapeHTML(status)}</span></summary><pre>${escapeHTML(JSON.stringify(content,null,2))}</pre></details>`}).join('');
-  $('download').href='/api/report?path='+encodeURIComponent(path);$('detail-count').textContent=`${data.results?.length||0} cases`;
+  $('download').href='/api/report?path='+encodeURIComponent(path);$('download-pdf').href='/api/report.pdf?path='+encodeURIComponent(path);$('download-pdf').download=(data.target_model||'report').replace(/[^\w.-]+/g,'_')+'_report.pdf';$('detail-count').textContent=`${data.results?.length||0} cases`;
   $('detail').showModal();icons();
  }catch(error){toast(error.message);}
 }

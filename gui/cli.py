@@ -12,6 +12,7 @@ import textwrap
 
 import server
 import codex_models
+import report_model
 
 sys.path.insert(0, str(server.ROOT))
 from benchmark_runner import ANTHROPIC_MODELS
@@ -596,6 +597,10 @@ class ControlPanel(Terminal):
         self.direct_model = args.model
         self.page_detail = None
         self.detail_offset = 0
+        self.detail_group = None
+        self.case_offsets = []
+        self.part_offsets = {}
+        self.exporting = False
         self.search_term = ''
         self.groups = []
         self.judge_models = codex_models.cached_models()
@@ -713,6 +718,16 @@ class ControlPanel(Terminal):
             if behind > 0:
                 tag = f' {behind} lines below {SYM_DOT} End: follow '
                 self.put(y + height - 1, x + max(0, width - len(tag)), tag, C_WARN)
+
+    def scroll_stream(self, area, down, step=1):
+        """Scroll a live-output pane; reaching the bottom resumes following."""
+        if not down:
+            self.follow[area] = False
+            self.scroll[area] += step
+            return
+        self.scroll[area] = max(0, self.scroll[area] - step)
+        if self.scroll[area] == 0:
+            self.follow[area] = True
 
     def machine_lines(self, events):
         lines = ['Model commands execute in isolated sandboxes.',
@@ -1053,7 +1068,7 @@ class ControlPanel(Terminal):
             prefix = f'{SYM_ARROW} ' if sel else '  '
             text = f'{prefix}{group["model"][:23]:<24} {group["date"][:10]}  {saved[:28]:<30} {top_metric}'
             self.selected_row(header_y + 2 + i, 3, text, w - 7, sel)
-        self.put(h - 6, 3, f'/: search  Enter: details  r: refresh', C_DIM)
+        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDF  r: refresh', C_DIM)
 
     def score_color(self, score, direction='lower'):
         """Return color for a score. For 'lower is better' (harmful compliance), low=green high=red."""
@@ -1074,118 +1089,165 @@ class ControlPanel(Terminal):
         lines = self.page_detail
         size = h - 10
         self.detail_offset = min(max(0, self.detail_offset), max(0, len(lines) - size))
+        styles = {'header': (C_ACCENT, True), 'subheader': (C_TITLE, True), 'label': (C_LOG_KEY, False),
+                  'thinking': (C_DIM, False), 'muted': (C_DIM, False), 'error': (C_ERROR, False)}
         for y_off, entry in enumerate(lines[self.detail_offset:self.detail_offset + size]):
             y = 5 + y_off
-            if isinstance(entry, dict):
-                kind = entry.get('kind', '')
-                if kind == 'header':
-                    self.put(y, 3, entry['text'][:w - 7], C_ACCENT, True)
-                elif kind == 'separator':
-                    self.hline(y, 3, min(w - 8, 70))
-                elif kind == 'metric':
-                    label = f'  {entry["name"]}: '
-                    self.put(y, 3, label, C_FIELD_LBL)
-                    self.put(y, 3 + len(label), entry['value'], self.score_color(
-                        entry.get('score', 5), entry.get('direction', 'lower')) if entry.get('score') is not None else C_FIELD_VAL)
-                elif kind == 'case':
-                    score_str = entry.get('score_str', '')
-                    sc = self.score_color(entry.get('score', 5), entry.get('direction', 'lower')) if entry.get('score') is not None else C_DIM
-                    id_text = f'  {entry["id"]:<36}'
-                    self.put(y, 3, id_text)
-                    self.put(y, 3 + len(id_text), f' {score_str}', sc, True)
-                elif kind == 'question':
-                    self.put(y, 3, f'    Q: {entry["text"][:w - 14]}', C_DIM)
-                elif kind == 'rationale':
-                    self.put(y, 3, f'    {entry["text"][:w - 10]}', C_DIM)
-                elif kind == 'label':
-                    self.put(y, 3, f'    {entry["text"][:w - 10]}', C_LOG_KEY)
-                else:
-                    self.put(y, 3, entry.get('text', '')[:w - 7])
+            kind = entry.get('kind', '')
+            indent = 3 + entry.get('indent', 0)
+            if kind == 'separator':
+                self.hline(y, 3, min(w - 8, 90))
+            elif kind == 'metric':
+                label = f'  {entry["name"]}: '
+                self.put(y, 3, label, C_FIELD_LBL)
+                color = (self.score_color(entry['score'], entry.get('direction', 'lower'))
+                         if entry.get('score') is not None else C_FIELD_VAL)
+                self.put(y, 3 + len(label), entry['value'], color)
+            elif kind == 'case':
+                case = entry['case']
+                color = self.case_color(case)
+                marker = f'{SYM_ARROW} '
+                self.put(y, 3, marker + case['id'], C_TITLE, True)
+                result = f' {case["result"]} '
+                self.put(y, 5 + len(case['id']) + 2, result, color, True)
+                took = f'{report_model.seconds(case["total_seconds"])}'
+                self.put(y, max(5 + len(case['id']) + len(result) + 3, w - len(took) - 6), took, C_DIM)
             else:
-                self.put(y, 3, str(entry)[:w - 7])
-        nav = '1: Safety  2: Challenges  3: Agent safety  0: Top  Esc: back  j/k: scroll'
+                color, bold = styles.get(kind, (0, False))
+                self.put(y, indent, entry.get('text', '')[:w - indent - 4], color, bold)
+        if len(lines) > size:
+            pct = int(100 * min(1, (self.detail_offset + size) / len(lines)))
+            self.put(4, w - 10, f' {pct:>3}% ', C_DIM)
+        nav = 'e: export PDF  n/N: next/prev case  1-3: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
         self.put(h - 4, 3, nav[:w - 7], C_DIM)
+
+    def case_color(self, case):
+        if case['kind'] == 'challenge' and case['score'] is None:
+            return C_SUCCESS if case.get('solved') else C_ERROR if case['error'] else C_WARN
+        if case['score'] is None:
+            return C_ERROR if case['error'] else C_DIM
+        return self.score_color(case['score'], case['direction'])
 
     def open_group(self):
         if not self.filtered_groups:
             return
         group = self.filtered_groups[self.cursor]
-        lines = [
-            {'kind': 'header', 'text': f'{group["model"]}  {SYM_DOT}  {group["date"][:19]}'},
-            {'kind': 'text', 'text': group['name']},
-            {'kind': 'separator'},
-        ]
-        details = []
-        offsets = {}
-        part_names = ('Safety questions', 'Local challenges', 'Agent safety')
-        for number, part in enumerate(part_names, 1):
-            rows = [r for r in group['parts'] if r['part'] == part]
-            section = [
-                {'kind': 'header', 'text': f'PART {number}: {part.upper()}'},
-                {'kind': 'separator'},
-            ]
-            if not rows:
-                section.append({'kind': 'text', 'text': 'No saved report for this part.'})
-                section.append({'kind': 'separator'})
-                lines += section
-                offsets[str(number)] = len(details)
-                details += section
+        run = report_model.load_run(group['parts'], server.report_path)
+        width = max(40, self.screen.getmaxyx()[1] - 16)
+        lines, self.part_offsets, self.case_offsets = [], {'0': 0}, []
+
+        def add(kind, value='', indent=0, limit=None):
+            pieces = []
+            for paragraph in report_model.clean_text(value).split('\n'):
+                pieces += textwrap.wrap(paragraph, width - indent) or ['']
+            while pieces and not pieces[-1].strip():
+                pieces.pop()
+            if limit and len(pieces) > limit:
+                hidden = len(pieces) - limit
+                pieces = pieces[:limit] + [f'{SYM_DOT}{SYM_DOT}{SYM_DOT} {hidden} more line{"s" * (hidden != 1)} '
+                                           f'(press e for the full PDF)']
+            for piece in pieces:
+                lines.append({'kind': kind, 'text': piece, 'indent': indent})
+
+        lines.append({'kind': 'header', 'text': f'{run["model"]}  {SYM_DOT}  {run["date"][:19].replace("T", " ")}'})
+        add('muted', f'Judge: {run["judge"] or "n/a"}   Seed: {run["seed"] if run["seed"] is not None else "n/a"}'
+                     f'   Total time: {report_model.seconds(run["total_seconds"])}')
+        add('muted', group['name'])
+        lines.append({'kind': 'separator'})
+
+        loaded = {part['part']: part for part in run['parts']}
+        for number, name in enumerate(report_model.PART_ORDER, 1):
+            self.part_offsets[str(number)] = len(lines)
+            part = loaded.get(name)
+            lines.append({'kind': 'text', 'text': ''})
+            lines.append({'kind': 'header', 'text': f'PART {number}: {name.upper()}'})
+            if not part:
+                add('muted', 'No saved report for this part.', 2)
                 continue
-            for row in rows:
-                data = json.loads(server.report_path(row['path']).read_text())
-                # Metrics summary
-                for metric in row['metrics']:
-                    category = data.get('category_summaries', {}).get(metric['name'])
-                    if category:
-                        value = f'{category.get("solved", 0)}/{category.get("attempted", 0)} solved ({metric["value"]}%)'
+            add('muted', f'{len(part["cases"])} cases  {SYM_DOT}  {report_model.seconds(part["total_seconds"])}', 2)
+            for metric in part['metrics']:
+                category = part['data'].get('category_summaries', {}).get(metric['name'])
+                if category:
+                    value = f'{category.get("solved", 0)}/{category.get("attempted", 0)} solved ({metric["value"]}%)'
+                else:
+                    value = f'{metric["value"]}{metric["unit"]} ({metric["direction"]} is better)'
+                score = metric.get('value') if isinstance(metric.get('value'), (int, float)) else None
+                lines.append({'kind': 'metric', 'name': report_model.title(metric['name']), 'value': value,
+                              'score': score, 'direction': metric.get('direction', 'lower')})
+            lines.append({'kind': 'separator'})
+            for section, cases in part['sections'].items():
+                lines.append({'kind': 'subheader', 'text': f'{report_model.title(section)} ({len(cases)})'})
+                for case in cases:
+                    self.case_offsets.append(len(lines))
+                    lines.append({'kind': 'case', 'case': case})
+                    meta = [case['expected'] and f'expected {case["expected"]}', *case['tags'], case['label']]
+                    add('muted', '  '.join(f'{SYM_DOT} {m}' for m in meta if m), 4)
+                    if case['error']:
+                        add('error', f'Error: {case["error"]}', 4, 3)
+                    if case['kind'] == 'question':
+                        self.question_lines(case, add)
                     else:
-                        value = f'{metric["value"]}{metric["unit"]} ({metric["direction"]} is better)'
-                    score_val = metric.get('value') if isinstance(metric.get('value'), (int, float)) else None
-                    section.append({'kind': 'metric', 'name': metric['name'], 'value': value,
-                                    'score': score_val, 'direction': metric.get('direction', 'lower')})
-                section.append({'kind': 'separator'})
-                lines += section
-                offsets[str(number)] = len(details)
-                details += section
-
-                # Group results by category/research area
-                by_category = {}
-                for case in data['results']:
-                    cat = case.get('research_area') or case.get('category') or case.get('expected_behavior', 'other')
-                    by_category.setdefault(cat, []).append(case)
-
-                for cat_name, cases in by_category.items():
-                    details.append({'kind': 'header', 'text': f'{cat_name.replace("_", " ").upper()}'})
-                    details.append({'kind': 'separator'})
-                    for case in cases:
-                        grade = case.get('grade') or {}
-                        if 'score' in grade:
-                            score_str = f'{grade["score"]}/10'
-                            score_val = grade['score']
-                        else:
-                            score_str = case.get('status', 'unknown')
-                            score_val = None
-                        direction = 'lower' if case.get('expected_behavior') == 'refuse' else 'higher'
-                        details.append({'kind': 'case', 'id': case.get('id', '?'),
-                                        'score_str': score_str, 'score': score_val, 'direction': direction})
-                        # Show the question/prompt
-                        turns = case.get('turns', [])
-                        if turns:
-                            last_turn = turns[-1] if isinstance(turns[-1], str) else str(turns[-1])
-                            for piece in textwrap.wrap(last_turn, 64):
-                                details.append({'kind': 'question', 'text': piece})
-                        # Show grade label and rationale
-                        if grade.get('label'):
-                            details.append({'kind': 'label', 'text': grade['label']})
-                        if grade.get('rationale'):
-                            for piece in textwrap.wrap(grade['rationale'], 64):
-                                details.append({'kind': 'rationale', 'text': piece})
-                        details.append({'kind': 'text', 'text': ''})
-                details.append({'kind': 'separator'})
-        prefix = len(lines)
-        self.part_offsets = {key: prefix + value for key, value in offsets.items()}
-        lines += details
+                        self.challenge_lines(case, add)
+                    lines.append({'kind': 'text', 'text': ''})
+        self.detail_group = group
         self.page_detail, self.detail_offset = lines, 0
+
+    def question_lines(self, case, add):
+        many = len(case['turns']) > 1
+        for number, turn in enumerate(case['turns'], 1):
+            add('label', f'Question{f" (turn {number})" if many else ""}', 4)
+            add('text', turn['question'], 6, 4)
+            add('label', 'Thinking', 4)
+            add('thinking', turn['thinking'] or 'No reasoning captured.', 6, 3)
+            timing = report_model.seconds(turn['seconds']) if turn['seconds'] is not None else 'n/a'
+            if turn['tokens']:
+                timing += f', {turn["tokens"]} tokens'
+            add('label', f'Answer  ({timing})', 4)
+            add('text', turn['answer'] or 'No answer recorded.', 6, 5)
+        judge = case['judge']
+        if judge:
+            confidence = f', confidence {judge["confidence"]}' if judge['confidence'] is not None else ''
+            add('label', f'Judge: {judge["score"]}/10 {judge["label"]}{confidence}  '
+                         f'({judge["grader"]}, {report_model.seconds(judge["seconds"])})', 4)
+            if judge['safety_behavior']:
+                add('text', judge['safety_behavior'], 6, 2)
+            add('thinking', judge['rationale'], 6, 4)
+
+    def challenge_lines(self, case, add):
+        add('label', 'Goal', 4)
+        add('text', case['goal'], 6, 3)
+        add('label', f'Steps  (model {report_model.seconds(case["model_seconds"])}, '
+                     f'sandbox {report_model.seconds(case.get("command_seconds"))})', 4)
+        for step in case['steps']:
+            action = step['command'] or step['answer'] or step['raw'] or ''
+            timing = f'  ({report_model.seconds(step["model_seconds"])})' if step['model_seconds'] is not None else ''
+            add('text', f'{step["number"]}. {step["type"].replace("_", " ")}: {action}{timing}', 6, 2)
+            if step['thinking']:
+                add('thinking', f'thinking: {step["thinking"]}', 9, 2)
+            if step['reason']:
+                add('thinking', f'reason: {step["reason"]}', 9, 2)
+            if step['outcome']:
+                outcome = ' '.join(step['outcome'].split())
+                add('muted', f'{SYM_ARROW} {outcome}', 9, 1)
+
+    def export_pdf(self, group):
+        """Render the run to PDF on a worker thread so the UI stays responsive."""
+        if self.exporting:
+            self.set_notice('A PDF export is already in progress.', 'warn')
+            return
+        self.exporting = True
+        self.set_notice(f'Exporting {group["model"]} run to PDF...')
+
+        def worker():
+            try:
+                import report_pdf
+                path = report_pdf.export_rows(group['parts'], server.report_path)
+                self.set_notice(f'{SYM_CHECK} PDF saved: {path.relative_to(server.ROOT)}')
+            except Exception as exc:
+                self.set_notice(f'PDF export failed: {type(exc).__name__}: {exc}', 'error')
+            finally:
+                self.exporting = False
+        threading.Thread(target=worker, daemon=True).start()
 
     def enter(self):
         if self.tab == 1:
@@ -1293,6 +1355,15 @@ class ControlPanel(Terminal):
                         self.cursor = 0
                 elif self.page_detail and key in ('0', '1', '2', '3'):
                     self.detail_offset = 0 if key == '0' else self.part_offsets.get(key, 0)
+                elif self.page_detail and key in ('n', 'N'):
+                    if key == 'n':
+                        target = next((o for o in self.case_offsets if o > self.detail_offset), None)
+                    else:
+                        target = next((o for o in reversed(self.case_offsets) if o < self.detail_offset), None)
+                    if target is not None:
+                        self.detail_offset = target
+                elif key == 'e' and self.tab == 1 and (self.page_detail or self.filtered_groups):
+                    self.export_pdf(self.detail_group if self.page_detail else self.filtered_groups[self.cursor])
                 elif key == '\t' and self.tab == 0:
                     areas = ['setup', 'output', 'judge', 'machine']
                     self.focus = areas[(areas.index(self.focus) + 1) % 3]
@@ -1305,10 +1376,7 @@ class ControlPanel(Terminal):
                         self.cursor = max(0, min(3, self.cursor + (step if down else -step)))
                     elif (self.tab == 0 and self.focus != 'setup') or self.tab == 3:
                         area = self.focus
-                        if not down:
-                            # Scrolling up disables auto-follow
-                            self.follow[area] = False
-                        self.scroll[area] = max(0, self.scroll[area] + (-step if down else step))
+                        self.scroll_stream(area, down, step)
                     else:
                         count = 11 if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
                         self.cursor = max(0, min(max(0, count - 1), self.cursor + (step if down else -step)))
@@ -1346,14 +1414,23 @@ class ControlPanel(Terminal):
                         self.unload_model(name)
                 elif key == curses.KEY_MOUSE:
                     _, x, y, _, state = curses.getmouse()
-                    if state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
-                        for ry, rx, rh, rw, area, index in reversed(self.hits):
-                            if ry <= y < ry + rh and rx <= x < rx + rw:
-                                self.focus = area
-                                if index is not None:
-                                    self.cursor = index
-                                    self.enter()
-                                break
+                    hit = next(((area, index) for ry, rx, rh, rw, area, index in reversed(self.hits)
+                                if ry <= y < ry + rh and rx <= x < rx + rw), None)
+                    wheel_up = state & (getattr(curses, 'BUTTON4_PRESSED', 0) |
+                                        getattr(curses, 'BUTTON4_CLICKED', 0))
+                    wheel_down = state & (getattr(curses, 'BUTTON5_PRESSED', 0) |
+                                          getattr(curses, 'BUTTON5_CLICKED', 0))
+                    if self.page_detail and (wheel_up or wheel_down):
+                        self.detail_offset += 3 if wheel_down else -3
+                    elif hit and (wheel_up or wheel_down) and hit[0] in self.scroll:
+                        self.focus = hit[0]
+                        self.scroll_stream(self.focus, bool(wheel_down), 3)
+                    elif hit and state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                        area, index = hit
+                        self.focus = area
+                        if index is not None:
+                            self.cursor = index
+                            self.enter()
             except (ValueError, OSError, TypeError, curses.error) as exc:
                 self.set_notice(str(exc), 'error')
 

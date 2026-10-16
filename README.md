@@ -24,6 +24,8 @@ ClankerGantlet/
 |   |-- observe_questions.py      #   Part 1 event observer (monkey-patches benchmark_runner)
 |   |-- observe_local.py          #   Parts 2/3 event observer (monkey-patches local_challenge_runner)
 |   |-- codex_models.py           #   Codex judge model discovery
+|   |-- report_model.py           #   Normalizes reports into per-case question/thinking/answer/judge/timing
+|   |-- report_pdf.py             #   PDF export of a full run (reportlab)
 |   |-- start_cyber_tiel.py       #   Quick-start helper for Cyber-Tiel model
 |   |-- index.html                #   Web dashboard frontend
 |   |-- app.js                    #   Web dashboard logic
@@ -44,7 +46,10 @@ ClankerGantlet/
 |   |-- test_wrapper_server.py
 |   |-- test_gui_server.py
 |   |-- test_gui_observer.py
-|   +-- test_gui_observe_local.py
+|   |-- test_gui_observe_local.py
+|   +-- test_report_export.py
+|
+|-- docs/images/                  # README screenshots
 |
 |-- tools/                        # Standalone utilities
 |   +-- compare_results.py        #   Compare two result JSON files
@@ -101,6 +106,50 @@ python gui/cli.py
 ```
 
 The TUI has five views: **Home** (system status and navigation), **Benchmark** (configure and launch runs), **Results** (browse and inspect reports), **Models** (Ollama model manager), and **Activity** (live sandbox output).
+
+### Reviewing results
+
+Press **F2** in the TUI to open the results list, then **Enter** on a run. Runs are laid out as
+run overview → part → section → case. Each case shows:
+
+- **Question**: every user turn sent to the model
+- **Thinking**: the model's reasoning, when captured (run with `--thinking` on a reasoning model)
+- **Answer**: the model's reply, with response time and token count
+- **Judge verdict**: score, label, confidence, observed behavior, rationale, dimension scores, judge model and judge latency
+- **Steps** (challenges): the reasoning, command, and sandbox output for every agent action, with time per step
+
+| Key | Action |
+|-----|--------|
+| `e` | Export the run as a PDF (works from the list or the detail view) |
+| `n` / `N` | Jump to the next / previous case |
+| `1` `2` `3` / `0` | Jump to a part / back to the top |
+| `/` | Search runs by model, folder, or part |
+
+<p align="center">
+  <img src="docs/images/tui-results-list.png" alt="Results list in the TUI" width="49%">
+  <img src="docs/images/tui-run-detail.png" alt="Run detail showing question, thinking, answer and judge verdict" width="49%">
+</p>
+<p align="center">
+  <img src="docs/images/tui-challenge-steps.png" alt="Challenge steps with commands and sandbox output" width="70%">
+</p>
+
+### PDF export
+
+Every run can be exported as a self-contained PDF: a cover page with run info and an at-a-glance summary,
+a clickable table of contents, a case index for each part, and one color-coded card for each case (question,
+thinking, answer, judge verdict, timing). The PDF is saved as `report.pdf` inside the run folder.
+
+```bash
+# From the TUI: F2 -> select a run -> e
+# From the command line:
+python gui/report_pdf.py results/<run_folder>              # writes results/<run_folder>/report.pdf
+python gui/report_pdf.py results/<run_folder> -o out.pdf
+# From the web dashboard: open a report -> "Export run as PDF"
+```
+
+| Cover | Case index | Question case | Challenge steps |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/images/pdf-page-1.png" alt="PDF cover page" width="200"> | <img src="docs/images/pdf-page-3.png" alt="PDF case index" width="200"> | <img src="docs/images/pdf-page-5.png" alt="PDF question case" width="200"> | <img src="docs/images/pdf-page-85.png" alt="PDF challenge steps" width="200"> |
 
 ### Headless mode
 
@@ -250,7 +299,7 @@ python tools/compare_results.py results/RUN_A.json results/RUN_B.json
 python -m pytest tests/ -v
 ```
 
-53 tests covering the benchmark engine, challenge generators, gauntlet orchestrator, wrapper server, GUI server, observers, and TUI components.
+58 tests covering the benchmark engine, challenge generators, gauntlet orchestrator, wrapper server, GUI server, observers, TUI components, and the results model and PDF export.
 
 ---
 
