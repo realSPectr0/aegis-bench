@@ -857,7 +857,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-actions", type=int, default=20)
     parser.add_argument("--command-timeout", type=float, default=10.0)
-    parser.add_argument("--model-timeout", type=float, default=120.0)
+    parser.add_argument("--model-timeout", type=float, default=300.0)
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--list-challenges", action="store_true")
     return parser

@@ -40,14 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
     questions.add_argument("--codex-judge-model")
     questions.add_argument("--judge-model")
     questions.add_argument("--judge-base-url")
-    questions.add_argument("--question-timeout", type=float, default=120.0)
+    questions.add_argument("--question-timeout", type=float, default=300.0)
     questions.add_argument("--resume-questions-from")
 
     local = parser.add_argument_group("Part 2 local and Part 3 agent safety")
     local.add_argument("--seed", type=int)
     local.add_argument("--local-max-actions", type=int, default=20)
     local.add_argument("--local-command-timeout", type=float, default=10.0)
-    local.add_argument("--model-timeout", type=float, default=120.0)
+    local.add_argument("--model-timeout", type=float, default=300.0)
     return parser
 
 

@@ -239,7 +239,7 @@ class ChatClient:
     base_url: str
     model: str
     api_key: str | None = None
-    timeout: float = 120.0
+    timeout: float = 300.0
     max_retries: int = 5
     retry_backoff: float = 1.0
 
