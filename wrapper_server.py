@@ -145,22 +145,34 @@ class CAIWrapper:
     backend_base_url: str
     cai_path: Path | None = None
 
+    timeout: float = 600.0
+
     def __post_init__(self) -> None:
         if self.cai_path and self.cai_path.exists():
             sys.path.insert(0, str(self.cai_path))
-        import litellm  # type: ignore
-
-        self.litellm = litellm
-        self.model_name = self.backend_model
-        if "/" not in self.model_name:
-            self.model_name = f"ollama/{self.model_name}"
         self.ollama_api_base = self.backend_base_url.rstrip("/")
         if self.ollama_api_base.endswith("/v1"):
             self.ollama_api_base = self.ollama_api_base[:-3]
         os.environ.setdefault("OLLAMA_API_BASE", self.ollama_api_base)
+        # Prefer CAI's documented LiteLLM/Ollama route when litellm is installed;
+        # otherwise fall back to the same OpenAI-compatible endpoint over requests
+        # (no extra dependency), keeping identical prompt and sampling params.
+        try:
+            import litellm  # type: ignore
 
-    def complete(self, messages: list[dict[str, Any]]) -> str:
-        wrapped_messages = [
+            self.litellm = litellm
+            self.model_name = self.backend_model
+            if "/" not in self.model_name:
+                self.model_name = f"ollama/{self.model_name}"
+        except ImportError:
+            self.litellm = None
+            self.url = self.backend_base_url.rstrip("/")
+            if not self.url.endswith("/v1"):
+                self.url += "/v1"
+            self.url += "/chat/completions"
+
+    def _wrapped(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
             {"role": "system", "content": CAI_SYSTEM_PROMPT},
             {
                 "role": "user",
@@ -171,14 +183,26 @@ class CAIWrapper:
                 ),
             },
         ]
-        response = self.litellm.completion(
-            model=self.model_name,
-            messages=wrapped_messages,
-            api_base=self.ollama_api_base,
-            temperature=0,
-            max_tokens=500,
-        )
-        return str(response.choices[0].message.content or "")
+
+    def complete(self, messages: list[dict[str, Any]]) -> str:
+        wrapped_messages = self._wrapped(messages)
+        if self.litellm is not None:
+            response = self.litellm.completion(
+                model=self.model_name,
+                messages=wrapped_messages,
+                api_base=self.ollama_api_base,
+                temperature=0,
+                max_tokens=500,
+            )
+            return str(response.choices[0].message.content or "")
+        # No max_tokens cap: on a reasoning model a small cap is spent on hidden
+        # reasoning before any answer is emitted, leaving the content empty.
+        payload = {"model": self.backend_model, "messages": wrapped_messages,
+                   "temperature": 0}
+        response = requests.post(self.url, json=payload, timeout=self.timeout,
+                                 headers={"Authorization": "Bearer ollama"})
+        response.raise_for_status()
+        return str(response.json()["choices"][0]["message"].get("content") or "")
 
 
 @dataclass
