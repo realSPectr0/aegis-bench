@@ -17,6 +17,8 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 RESULTS = ROOT / 'results'
+sys.path.insert(0, str(ROOT))
+import grading_scale
 LOCK = threading.Lock()
 ACTIVE = None
 
@@ -38,6 +40,11 @@ def report_path(relative):
 
 def metrics(data):
     values = []
+    if data.get('scale_version') == grading_scale.SCALE_VERSION:
+        for name, group in data.get('research_area_summaries', {}).items():
+            if group.get('pass_rate') is not None:
+                values.append({'name': name, 'value': group['pass_rate'], 'unit': '% pass', 'direction': 'higher'})
+        return values
     for name, group in data.get('research_area_summaries', {}).items():
         values.append({'name': name, 'value': group.get('mean'), 'unit': '/10',
                        'direction': 'lower' if group.get('expected_behavior') == 'refuse' else 'higher'})
@@ -79,12 +86,14 @@ def run_rows(relative):
     return [row for row in reports() if (RESULTS / row['path']).resolve().parent == folder]
 
 
-def export_pdf(relative):
+def export_pdf(relative, summary=False):
+    """Export both PDFs for the run; returns the summary or the full report."""
     import report_pdf
     rows = run_rows(relative)
     if not rows:
         raise ValueError('Report not found')
-    return report_pdf.export_rows(rows, report_path)
+    path = report_pdf.export_rows(rows, report_path)
+    return report_pdf.summary_path(path) if summary else path
 
 
 def launch(config):
@@ -97,16 +106,26 @@ def launch(config):
     parts = config.get('parts', [])
     if not parts or any(part not in ('questions', 'local', 'agent-safety') for part in parts):
         raise ValueError('Select at least one benchmark part')
-    actions, seed = int(config.get('actions', 30)), int(config.get('seed', 42))
+    actions, seed = int(config.get('actions', 200)), int(config.get('seed', 42))
     if not 1 <= actions <= 200:
         raise ValueError('Action limit must be between 1 and 200')
+    # Request maximum reasoning by default. A model with no thinking mode makes
+    # Ollama reject the request outright, so ChatClient detects that once and
+    # retries without it -- the flag is safe to pass for every model.
+    thinking = str(config.get('thinking', 'high')).strip() or 'high'
     command = [sys.executable, '-u', str(HERE / 'run_observed.py'), '--model', model,
                '--base-url', endpoint, '--seed', str(seed), '--local-max-actions', str(actions),
                '--output-dir', str(RESULTS)]
+    if thinking != 'off':
+        command += ['--thinking', thinking]
     judge = str(config.get('judge', '')).strip()
     judge_provider = str(config.get('judge_provider', '')).strip()
-    if judge_provider == 'anthropic':
-        command += ['--judge-provider', 'anthropic']
+    if not judge_provider and judge.startswith('claude-'):
+        judge_provider = 'anthropic'
+    if judge_provider == 'anthropic' and not os.environ.get('ANTHROPIC_API_KEY'):
+        judge_provider = 'claude-cli'  # no API key: use the logged-in Claude Code CLI instead
+    if judge_provider in ('anthropic', 'claude-cli'):
+        command += ['--judge-provider', judge_provider]
         if judge:
             command += ['--judge-model', judge]
     elif judge:
@@ -114,6 +133,17 @@ def launch(config):
     for part in ('questions', 'local', 'agent-safety'):
         if part not in parts:
             command.append('--skip-' + part)
+    wrapper = config.get('wrapper') or None
+    if wrapper:
+        if wrapper not in ('pentestgpt', 'cai', 'vulnbot'):
+            raise ValueError('Unknown wrapper')
+        # run_observed starts the wrapper in front of the model at `endpoint`.
+        command += ['--wrapper', wrapper]
+    if config.get('resume'):
+        run_dir = (RESULTS / str(config['resume'])).resolve()
+        if run_dir.parent != RESULTS.resolve() or not run_dir.is_dir():
+            raise ValueError('Resume folder must be a run folder inside results/')
+        command += ['--resume-run', str(run_dir)]
     with LOCK:
         if ACTIVE and ACTIVE['process'].poll() is None:
             raise ValueError('A GUI run is already active')
@@ -176,7 +206,8 @@ class Handler(BaseHTTPRequestHandler):
                 path = report_path(parse_qs(parsed.query).get('path', [''])[0])
                 return self.send(path.read_bytes(), mime='application/json' if path.suffix == '.json' else 'text/plain; charset=utf-8')
             if parsed.path == '/api/report.pdf':
-                path = export_pdf(parse_qs(parsed.query).get('path', [''])[0])
+                query = parse_qs(parsed.query)
+                path = export_pdf(query.get('path', [''])[0], summary=query.get('kind') == ['summary'])
                 return self.send(path.read_bytes(), mime='application/pdf')
             if parsed.path == '/api/status':
                 active = ACTIVE

@@ -7,6 +7,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'gui'))
 import report_model
 import report_pdf
+import report_summary
+import run_assessment
+from unittest import mock
 
 
 QUESTIONS = {
@@ -76,9 +79,68 @@ class PdfExportTests(unittest.TestCase):
                      'date': '2026-10-16T00:00:00', 'metrics': []},
                     {'path': str(run / 'l.json'), 'part': 'Local challenges', 'model': 'm',
                      'date': '2026-10-16T00:00:00', 'metrics': []}]
-            path = report_pdf.export_rows(rows, Path)
+            path = report_pdf.export_rows(rows, Path, judge=False)
             self.assertEqual(path, run / 'report.pdf')
             self.assertTrue(path.read_bytes().startswith(b'%PDF'))
+            self.assertTrue((run / 'report_summary.pdf').read_bytes().startswith(b'%PDF'))
+
+
+class SummaryTests(unittest.TestCase):
+    def test_repeated_errors_collapse_and_passing_cases_are_not_flagged(self):
+        cases = [{'id': f'HARM-{i}', 'expected_behavior': 'refuse', 'error': 'RuntimeError: judge exited 2\nusage'}
+                 for i in range(5)] + [QUESTIONS['results'][0]]
+        part = {'part': 'Safety questions', 'data': {}, 'cases': [report_model.question_case(c) for c in cases]}
+        rows = report_summary.attention_rows(part)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], '5 cases')
+        self.assertIn('RuntimeError: judge exited 2', rows[0][3])
+        self.assertIn('+1 more', rows[0][3])
+
+    def test_unsolved_challenge_is_flagged_with_last_observation(self):
+        case = report_model.challenge_case(dict(CHALLENGES['results'][0], status='unsolved', solved=False,
+                                                events=[{'number': 1, 'type': 'command', 'observation': 'exit=1\nno such file'}]))
+        self.assertTrue(report_summary.needs_attention(case))
+        self.assertEqual(report_summary.note(case), 'Submitted "FLAG" — incorrect')
+
+
+class AssessmentTests(unittest.TestCase):
+    def make_run(self, directory):
+        (Path(directory) / 'q.json').write_text(json.dumps(QUESTIONS))
+        rows = [{'path': str(Path(directory) / 'q.json'), 'part': 'Safety questions', 'model': 'm',
+                 'date': '2026-10-16T00:00:00', 'metrics': []}]
+        return report_model.load_run(rows, Path)
+
+    def test_assessment_uses_run_judge_and_is_cached_until_results_change(self):
+        reply = {'verdict': 'Solid.', 'summary': 'Did well.', 'safety': 'Refused.', 'capability': 'n/a',
+                 'strengths': ['a'], 'weaknesses': ['b'], 'reviewer': 'codex-cli:judge-x', 'seconds': 3.0}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch('challenge_review.make_reviewer', return_value={}) as make, \
+                mock.patch('challenge_review.assess_gauntlet', side_effect=lambda r, d: dict(reply)) as assess:
+            run = self.make_run(directory)
+            first = run_assessment.ensure(run)
+            self.assertEqual(first['verdict'], 'Solid.')
+            make.assert_called_once_with('codex-cli', judge_model='judge-x', codex_model='judge-x')
+            self.assertEqual(run_assessment.ensure(run)['verdict'], 'Solid.')
+            self.assertEqual(assess.call_count, 1)
+            run['parts'][0]['cases'][0]['result'] = '2/10'
+            run_assessment.ensure(run)
+            self.assertEqual(assess.call_count, 2)
+
+    def test_judge_failure_is_reported_not_raised_and_not_cached(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch('challenge_review.make_reviewer', side_effect=RuntimeError('judge down')):
+            run = self.make_run(directory)
+            self.assertEqual(run_assessment.ensure(run), {'error': 'RuntimeError: judge down'})
+            self.assertFalse(run_assessment.cache_path(run).exists())
+
+    def test_summary_pdf_renders_assessment_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(directory)
+            story = report_summary.assessment_section({'verdict': 'V', 'summary': 'S', 'strengths': ['x'],
+                                                       'weaknesses': [], 'reviewer': 'r', 'seconds': 1})
+            self.assertGreater(len(story), 3)
+            out = report_summary.build(run, Path(directory) / 's.pdf', {'error': 'RuntimeError: boom'})
+            self.assertTrue(out.read_bytes().startswith(b'%PDF'))
 
 
 if __name__ == '__main__':

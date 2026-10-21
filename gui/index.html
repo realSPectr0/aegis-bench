@@ -21,7 +21,7 @@
      <label for="model">Target model</label><div class="input-icon"><i data-lucide="box"></i><input id="model" list="model-list" value="cyber-tiel-coder" required autocomplete="off"><datalist id="model-list"></datalist></div>
      <label for="endpoint">API endpoint</label><input id="endpoint" type="url" value="http://127.0.0.1:8080/v1" required>
      <div class="field-grid"><div><label for="judge">Codex judge model</label><input id="judge" placeholder="Configured default"></div><div><label for="seed">Seed</label><input id="seed" type="number" value="42" required></div></div>
-     <div class="field-grid"><div><label for="actions">Max actions / task</label><input id="actions" type="number" min="1" max="200" value="30" required></div><div class="judge-tag"><i data-lucide="badge-check"></i><span>Independent grading<span>Codex CLI + local verifiers</span></span></div></div>
+     <div class="field-grid"><div><label for="actions">Max actions / task</label><input id="actions" type="number" min="1" max="200" value="200" required></div><div class="judge-tag"><i data-lucide="badge-check"></i><span>Independent grading<span>Codex CLI + local verifiers</span></span></div></div>
      <label>Benchmark parts</label><div class="part-options">
       <label class="part-option"><input type="checkbox" name="parts" value="questions" checked><span class="part-number">01</span><span>Safety questions<small>Refusal, utility & memory</small></span><i data-lucide="message-square"></i></label>
       <label class="part-option"><input type="checkbox" name="parts" value="local" checked><span class="part-number">02</span><span>Local challenges<small>Shell, forensics & secure code</small></span><i data-lucide="terminal"></i></label>
@@ -44,6 +44,6 @@
  <footer>CLANKER GAUNTLET<span>LOCAL BENCHMARK WORKSPACE <span class="dot mint"></span></span></footer>
  </div>
 </main>
-<dialog id="detail"><div class="dialog-header"><div><span class="eyebrow" id="detail-part"></span><h2 id="detail-title"></h2></div><button class="icon-button" id="close-detail" title="Close report" aria-label="Close report"><i data-lucide="x"></i></button></div><div id="detail-metrics"></div><div id="detail-results"></div><div class="dialog-footer"><a id="download" class="text-button" download><i data-lucide="download"></i>Download JSON</a><a id="download-pdf" class="text-button" download><i data-lucide="file-text"></i>Export run as PDF</a><span class="muted" id="detail-count"></span></div></dialog>
+<dialog id="detail"><div class="dialog-header"><div><span class="eyebrow" id="detail-part"></span><h2 id="detail-title"></h2></div><button class="icon-button" id="close-detail" title="Close report" aria-label="Close report"><i data-lucide="x"></i></button></div><div id="detail-metrics"></div><div id="detail-results"></div><div class="dialog-footer"><a id="download" class="text-button" download><i data-lucide="download"></i>Download JSON</a><a id="download-summary" class="text-button" download><i data-lucide="file-text"></i>Export summary PDF</a><a id="download-pdf" class="text-button" download><i data-lucide="file-text"></i>Export full PDF</a><span class="muted" id="detail-count"></span></div></dialog>
 <div id="toast" role="status" hidden></div>
 </body></html>

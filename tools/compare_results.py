@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import grading_scale
 
 
 def load_result(path: Path) -> dict[str, Any]:
@@ -53,6 +57,30 @@ def format_rate(values: dict[str, Any] | None) -> str:
     attempted = values.get("attempted", 0)
     rate = values.get("solve_rate", 0)
     return f"{solved}/{attempted} ({rate}%)"
+
+
+def suite_warning(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
+    # Reports from before suite versioning count as suite 1.
+    left_version = left.get("suite_version", 1)
+    right_version = right.get("suite_version", 1)
+    part2_left = any(row.get("category") != "agent_safety" for row in local_rows(left).values())
+    part2_right = any(row.get("category") != "agent_safety" for row in local_rows(right).values())
+    warnings = []
+    if part2_left and part2_right and left_version != right_version:
+        warnings.append(
+            f"WARNING: challenge suite versions differ (left v{left_version}, right v{right_version}); "
+            "Part 2 scores are not directly comparable."
+        )
+    # Reports from before the Pi integration were all produced by the builtin harness.
+    left_harness = left.get("harness", "builtin")
+    right_harness = right.get("harness", "builtin")
+    if left_harness != right_harness:
+        warnings.append(
+            f"WARNING: agent harnesses differ (left {left_harness}, right {right_harness}); "
+            "the builtin harness also measures action-protocol compliance, so these "
+            "scores are not directly comparable."
+        )
+    return warnings + [""] if warnings else []
 
 
 def compare_local(left: dict[str, Any], right: dict[str, Any], left_name: str, right_name: str) -> list[str]:
@@ -117,6 +145,14 @@ def part1_summary(data: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def part1_text(group: dict[str, Any]) -> str:
+    if not group:
+        return "-"
+    if "pass" in group:
+        return f"{group['pass']}P/{group['partial']}p/{group['fail']}F n={group['count']}"
+    return f"{group.get('mean', '-')}/10 n={group.get('count', '-')}"
+
+
 def compare_part1(left: dict[str, Any], right: dict[str, Any], left_name: str, right_name: str) -> list[str]:
     left_summary = part1_summary(left)
     right_summary = part1_summary(right)
@@ -132,9 +168,10 @@ def compare_part1(left: dict[str, Any], right: dict[str, Any], left_name: str, r
     for behavior in ("refuse", "comply", "bounded"):
         lval = left_summary.get(behavior, {})
         rval = right_summary.get(behavior, {})
-        left_text = f"{lval.get('mean', '-')}/10 n={lval.get('count', '-')}" if lval else "-"
-        right_text = f"{rval.get('mean', '-')}/10 n={rval.get('count', '-')}" if rval else "-"
-        lines.append(f"{behavior:<18} {left_text:<24} {right_text:<24}")
+        lines.append(f"{behavior:<18} {part1_text(lval):<24} {part1_text(rval):<24}")
+    if (left.get("scale_version") == grading_scale.SCALE_VERSION) != (right.get("scale_version") == grading_scale.SCALE_VERSION):
+        lines.append("WARNING: one report uses the old 0-10 scale and the other Pass / Partial / Fail; "
+                     "the two are not comparable.")
     return lines
 
 
@@ -160,6 +197,7 @@ def main() -> int:
         f"Right: {right_name} ({args.right})",
         "",
     ]
+    lines.extend(suite_warning(left, right))
     lines.extend(compare_local(left, right, left_name, right_name))
     lines.extend(compare_tasks(left, right, left_label, right_label))
     lines.extend(compare_part1(left, right, left_name, right_name))

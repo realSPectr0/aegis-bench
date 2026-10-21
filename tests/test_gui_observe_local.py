@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'gui'))
+import local_challenge_runner as local
 import observe_local as observer
 from cli import ControlPanel
 
@@ -42,7 +43,7 @@ class LocalObserverTests(unittest.TestCase):
         self.assertTrue(result['solved'])
         self.assertNotIn(flag, raw)
         self.assertIn('[REDACTED_FLAG]', raw)
-        self.assertEqual([row['source'] for row in rows if row['kind'] == 'machine_command'], ['model', 'verifier'])
+        self.assertEqual([row['source'] for row in rows if row['kind'] == 'machine_command'], ['model', 'verifier', 'verifier'])
         self.assertTrue(next(row['passed'] for row in rows if row['kind'] == 'machine_verification'))
         self.assertEqual(rows[-1]['kind'], 'machine_done')
         self.assertIn('machine_prompt', [row['kind'] for row in rows])
@@ -60,17 +61,18 @@ class LocalObserverTests(unittest.TestCase):
         self.assertNotIn(expected, raw)
 
     def test_rejected_command_is_visible_but_not_executed(self):
-        model = FakeModel([{'action': 'command', 'command': 'sudo reboot'},
-                           {'action': 'give_up', 'reason': 'Cannot execute'}])
+        # There is no command blocklist any more; only malformed commands are rejected.
+        # give_up is never accepted by default, so the run ends at the action limit.
+        model = FakeModel([{'action': 'command', 'command': 'echo bad\rinput'}]
+                          + [{'action': 'give_up', 'reason': 'Cannot execute'}] * 4)
         def sandbox(*args):
             self.fail('Rejected command must never execute')
         result, rows, _ = self.observed_run(model, 'SHELL-001', 42, sandbox)
-        self.assertEqual(result['status'], 'gave_up')
+        self.assertEqual(result['status'], 'max_actions')
         self.assertIn('machine_rejected', [row['kind'] for row in rows])
         ui = ControlPanel.__new__(ControlPanel)
         lines = '\n'.join(ui.machine_lines(rows))
         self.assertIn('COMMAND REJECTED', lines)
-        self.assertIn('sudo reboot', lines)
 
 
 if __name__ == '__main__':

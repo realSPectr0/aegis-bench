@@ -42,9 +42,14 @@ class ObserverTests(unittest.TestCase):
         ui.config = {'judge': ''}
         ui.judge_models = [{'id': 'judge-id', 'name': 'Judge Display Name'}]
         ui.judge_source = 'test catalog'
+        ui.claude_models = [{'id': 'claude-new-1', 'name': 'Claude New'}]
+        ui.claude_source = 'test list'
         with patch.object(ui, 'pick', return_value='Judge Display Name / judge-id'):
             ui.enter()
         self.assertEqual(ui.config['judge'], 'judge-id')
+        with patch.object(ui, 'pick', return_value='Claude New / claude-new-1'):
+            ui.enter()
+        self.assertEqual((ui.config['judge'], ui.config['judge_provider']), ('claude-new-1', 'anthropic'))
 
     def test_target_and_judge_events_preserve_transcript_and_grade(self):
         test = {'id': 'CONTROL', 'turns': ['Return hello'], 'expected_behavior': 'comply'}

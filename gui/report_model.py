@@ -5,8 +5,12 @@ question / thinking / answer / judge / timing breakdown.
 """
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import grading_scale
 
 THINK = re.compile(r'<think>(.*?)(?:</think>|$)', re.S)
 PART_ORDER = ('Safety questions', 'Local challenges', 'Agent safety')
@@ -37,11 +41,36 @@ def seconds(value):
     value = float(value)
     if value < 60:
         return f'{value:.1f}s'
-    minutes, rest = divmod(value, 60)
+    minutes, rest = divmod(round(value), 60)
     if minutes < 60:
-        return f'{int(minutes)}m {rest:.0f}s'
+        return f'{minutes}m {rest}s'
     hours, minutes = divmod(minutes, 60)
     return f'{int(hours)}h {int(minutes)}m'
+
+
+def review_lines(review):
+    """Plain-text lines for a judge's qualitative review of an attempt or a run."""
+    review = review or {}
+    if review.get('error'):
+        return [f'Review failed: {review["error"]}']
+    lines = []
+    if review.get('verdict'):
+        lines.append(f'Verdict: {review["verdict"]}')
+    if review.get('overview'):
+        lines.append(review['overview'])
+    for name in ('methodology', 'efficiency'):
+        if review.get(name):
+            rating = review.get(f'{name}_rating')
+            lines.append(f'{title(name)}{f" {rating}/10" if rating is not None else ""}: {review[name]}')
+    for name in ('strengths', 'weaknesses', 'failure_patterns'):
+        if review.get(name):
+            lines.append(f'{title(name)}:')
+            lines += [f'  - {point}' for point in review[name]]
+    if review.get('where_it_went_wrong'):
+        lines.append(f'Where it went wrong: {review["where_it_went_wrong"]}')
+    if review.get('reviewer'):
+        lines.append(f'Reviewed by {review["reviewer"]} in {seconds(review.get("seconds"))}')
+    return lines
 
 
 def question_case(case):
@@ -69,19 +98,28 @@ def question_case(case):
     judge = None
     if grade:
         meta = grade.get('judge_metadata') or {}
-        judge = {'score': grade.get('score'), 'label': grade.get('label', ''),
+        current = grading_scale.is_current(grade)
+        judge = {'score': grade.get('points') if current else grade.get('score'),
+                 'max_score': grade.get('max_points') if current else 10,
+                 'outcome': grade.get('outcome', '') if current else '',
+                 'tag': grade.get('tag', '') if current else '',
+                 'result': grading_scale.result_text(grade),
+                 'label': grade.get('label', ''),
                  'confidence': grade.get('confidence'), 'rationale': grade.get('rationale', ''),
                  'safety_behavior': grade.get('safety_behavior', ''),
                  'dimensions': grade.get('dimensions') or {}, 'grader': grade.get('grader', ''),
                  'seconds': meta.get('latency_seconds')}
     model_seconds = sum(turn['seconds'] or 0 for turn in turns) if any(t['seconds'] for t in turns) else None
     expected = case.get('expected_behavior', '')
-    score = grade.get('score') if grade else None
+    score = judge['score'] if judge else None
+    current = bool(judge and judge['outcome'])
     return {
         'id': case.get('id', '?'), 'section': case.get('research_area') or case.get('category') or expected,
         'kind': 'question', 'expected': expected,
-        'direction': 'lower' if expected == 'refuse' else 'higher',
-        'score': score, 'result': f'{score}/10' if score is not None else ('error' if case.get('error') else 'ungraded'),
+        'direction': 'higher' if current or expected != 'refuse' else 'lower',
+        'score': score, 'outcome': judge['outcome'] if judge else '', 'tag': judge['tag'] if judge else '',
+        'result': ((judge['result'] + (f' · {grading_scale.TAG_TEXT[judge["tag"]]}' if judge['tag'] else ''))
+                   if judge else ('error' if case.get('error') else 'ungraded')),
         'label': judge['label'] if judge else '', 'judge': judge, 'turns': turns, 'steps': [],
         'goal': '', 'error': case.get('error', ''),
         'tags': [value for value in (case.get('subpart'), case.get('category'), case.get('variant')) if value],
@@ -130,7 +168,7 @@ def challenge_case(case):
         'id': case.get('id', '?'), 'section': case.get('category', 'other'), 'kind': 'challenge',
         'expected': '', 'direction': 'higher', 'score': score,
         'result': status.replace('_', ' ') + (f' {SCORE_SEP} {score}/10' if score is not None else ''),
-        'label': ', '.join(flags), 'judge': None, 'goal': case.get('goal', ''),
+        'label': ', '.join(flags), 'judge': None, 'review': case.get('review'), 'goal': case.get('goal', ''),
         'prompt': case.get('initial_prompt', ''), 'turns': [], 'steps': steps,
         'error': case.get('error', ''), 'tags': [f'{case.get("actions", len(steps))} actions'],
         'solved': case.get('solved'), 'model_seconds': case.get('model_seconds'),
