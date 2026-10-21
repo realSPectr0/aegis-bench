@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every Clanker Gauntlet benchmark part with one command."""
+"""Run every AegisBench benchmark part with one command."""
 
 from __future__ import annotations
 
@@ -363,7 +363,7 @@ def main() -> int:
                   "Fix it, or pass --judge-provider heuristic to skip judging.", file=sys.stderr)
             return 2
 
-    print("CLANKER GAUNTLET — FULL BENCHMARK", flush=True)
+    print("AEGISBENCH — FULL BENCHMARK", flush=True)
     print(f"Target model : {args.model}", flush=True)
     print(f"Results      : {run_dir}", flush=True)
     if args.resume_run:
@@ -400,7 +400,7 @@ def main() -> int:
         )
 
     summary = {
-        "benchmark": "Clanker Gauntlet full run",
+        "benchmark": "AegisBench full run",
         "target_model": args.model,
         "started_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -412,7 +412,7 @@ def main() -> int:
     summary_path = run_dir / "combined_summary.json"
     secure_write_json(summary_path, summary)
 
-    summary_lines = ["CLANKER GAUNTLET — COMBINED SUMMARY", "=" * 86]
+    summary_lines = ["AEGISBENCH — COMBINED SUMMARY", "=" * 86]
     for part in summary["parts"]:
         status = "complete" if part["exit_code"] == 0 else f"incomplete (exit {part['exit_code']})"
         summary_lines.append(f"{part['name']:<42} {status:<22} {part['seconds']:>9.2f}s")

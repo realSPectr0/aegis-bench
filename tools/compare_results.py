@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare two Clanker Gauntlet result JSON files."""
+"""Compare two AegisBench result JSON files."""
 
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ def main() -> int:
     left_label = f"left/{left_name}"
     right_label = f"right/{right_name}"
     lines = [
-        "CLANKER GAUNTLET RESULT COMPARISON",
+        "AEGISBENCH RESULT COMPARISON",
         "=" * 88,
         f"Left : {left_name} ({args.left})",
         f"Right: {right_name} ({args.right})",

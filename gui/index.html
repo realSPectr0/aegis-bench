@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Clanker Gauntlet | Benchmark Lab</title><link rel="stylesheet" href="/style.css"><script src="/lucide.js" defer></script><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AegisBench | Benchmark Lab</title><link rel="stylesheet" href="/style.css"><script src="/lucide.js" defer></script><script src="/app.js" defer></script></head>
 <body>
 <aside class="sidebar">
  <a class="brand" href="/"><span class="brand-icon"><i data-lucide="scan-face"></i></span><span>CLANKER<span class="brand-sub">GAUNTLET</span></span></a>
@@ -12,7 +12,7 @@
  <header class="topbar"><div class="crumb">Workspace <span>/</span> <b id="breadcrumb">Overview</b></div><div class="topright"><span class="quiet"><span class="dot mint"></span> Local environment</span><button class="icon-button" id="refresh" title="Refresh results" aria-label="Refresh results"><i data-lucide="refresh-cw"></i></button><span class="avatar">CG</span></div></header>
  <div class="page">
  <section id="overview" class="view">
-  <div class="page-heading"><div><div class="eyebrow">BENCHMARK CONTROL CENTER</div><h1>Clanker Gauntlet<span class="version">LAB / 01</span></h1><p>Model behavior. Security boundaries. Measurable results.</p></div><button class="primary" id="new-run"><i data-lucide="plus"></i>New run</button></div>
+  <div class="page-heading"><div><div class="eyebrow">BENCHMARK CONTROL CENTER</div><h1>AegisBench<span class="version">LAB / 01</span></h1><p>Model behavior. Security boundaries. Measurable results.</p></div><button class="primary" id="new-run"><i data-lucide="plus"></i>New run</button></div>
   <div class="metrics" id="summary-metrics"></div>
   <div class="workspace-grid">
    <section class="configuration"><div class="section-heading"><h2><i data-lucide="sliders-horizontal"></i>Run configuration</h2><span class="mono">01 / SETUP</span></div>
@@ -41,7 +41,7 @@
  </section>
  <section id="runs" class="view" hidden><div class="page-heading"><div><div class="eyebrow">EXPERIMENT ARCHIVE</div><h1>Run history</h1><p>Every saved report, across models and benchmark parts.</p></div></div><div class="filter-bar"><div class="input-icon"><i data-lucide="search"></i><input id="search" placeholder="Search models or reports" aria-label="Search reports"></div><select id="part-filter" aria-label="Filter part"><option value="">All parts</option><option>Safety questions</option><option>Local challenges</option><option>Agent safety</option></select></div><div id="history-table"></div></section>
  <section id="compare" class="view" hidden><div class="page-heading"><div><div class="eyebrow">SIDE BY SIDE</div><h1>Compare results</h1><p>Compare saved reports from the same benchmark part.</p></div></div><div class="compare-selectors"><div><label for="compare-a">BASELINE</label><select id="compare-a"></select></div><i data-lucide="arrow-right-left"></i><div><label for="compare-b">CANDIDATE</label><select id="compare-b"></select></div></div><div id="comparison"></div></section>
- <footer>CLANKER GAUNTLET<span>LOCAL BENCHMARK WORKSPACE <span class="dot mint"></span></span></footer>
+ <footer>AEGISBENCH<span>LOCAL BENCHMARK WORKSPACE <span class="dot mint"></span></span></footer>
  </div>
 </main>
 <dialog id="detail"><div class="dialog-header"><div><span class="eyebrow" id="detail-part"></span><h2 id="detail-title"></h2></div><button class="icon-button" id="close-detail" title="Close report" aria-label="Close report"><i data-lucide="x"></i></button></div><div id="detail-metrics"></div><div id="detail-results"></div><div class="dialog-footer"><a id="download" class="text-button" download><i data-lucide="download"></i>Download JSON</a><a id="download-summary" class="text-button" download><i data-lucide="file-text"></i>Export summary PDF</a><a id="download-pdf" class="text-button" download><i data-lucide="file-text"></i>Export full PDF</a><span class="muted" id="detail-count"></span></div></dialog>

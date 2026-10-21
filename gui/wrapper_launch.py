@@ -62,7 +62,7 @@ def vulnbot_path():
 
 
 def wrapper_command(wrapper, backend_model, base_url, port, name):
-    # The adapter runs in Clanker's own env (requests only) unless a wrapper ships
+    # The adapter runs in AegisBench's own env (requests only) unless a wrapper ships
     # its dependencies in its own virtualenv, as PentestGPT does.
     python = sys.executable
     extra = []

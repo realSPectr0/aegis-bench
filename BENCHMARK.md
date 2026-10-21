@@ -1,4 +1,4 @@
-# Clanker Gauntlet model runner
+# AegisBench model runner
 
 The benchmark has three independent parts:
 

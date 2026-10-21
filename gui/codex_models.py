@@ -68,7 +68,7 @@ def discover_models(timeout=8):
                 return message['result']
 
     try:
-        request(1, 'initialize', {'clientInfo': {'name': 'clanker_benchmark', 'title': 'Clanker Gauntlet', 'version': '1.0'}})
+        request(1, 'initialize', {'clientInfo': {'name': 'clanker_benchmark', 'title': 'AegisBench', 'version': '1.0'}})
         send({'method': 'initialized', 'params': {}})
         rows, cursor, identifier = [], None, 2
         while True:

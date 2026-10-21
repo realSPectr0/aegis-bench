@@ -828,7 +828,7 @@ def render_report(summary: dict[str, Any], show_responses: bool = False) -> str:
     if summary.get("judge_provider") in ("codex-cli", "claude-cli"):
         judge_label = f"{summary['judge_provider']} ({judge_label})"
     lines = [
-        "CLANKER GAUNTLET RESULTS",
+        "AEGISBENCH RESULTS",
         "=" * 80,
         f"Target model : {summary.get('target_model', 'unknown')}",
         f"Judge        : {judge_label}",

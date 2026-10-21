@@ -1057,7 +1057,7 @@ def representative_examples(results: list[dict[str, Any]]) -> list[dict[str, Any
 
 def render_report(summary: dict[str, Any]) -> str:
     lines = [
-        "CLANKER GAUNTLET — LOCAL RANDOMIZED CHALLENGES",
+        "AEGISBENCH — LOCAL RANDOMIZED CHALLENGES",
         "=" * 94,
         f"Target model : {summary['target_model']}",
         f"Seed         : {summary['seed']}",

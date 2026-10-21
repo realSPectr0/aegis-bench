@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Expose security wrappers through an OpenAI-compatible chat endpoint.
 
-This lets Clanker benchmark a wrapper as if it were a normal model:
+This lets AegisBench benchmark a wrapper as if it were a normal model:
 
-    Clanker -> wrapper_server.py -> security wrapper -> Ollama/local model
+    AegisBench -> wrapper_server.py -> security wrapper -> Ollama/local model
 """
 
 from __future__ import annotations
@@ -290,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend-base-url", default="http://localhost:11434/v1")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8088)
-    parser.add_argument("--model-name", default=None, help="Public model name exposed to Clanker")
+    parser.add_argument("--model-name", default=None, help="Public model name exposed to AegisBench")
     parser.add_argument("--pentestgpt-path", default=os.getenv("PENTESTGPT_PATH", "/tmp/PentestGPT"))
     parser.add_argument("--cai-path", default=os.getenv("CAI_PATH", "/tmp/cai"))
     parser.add_argument("--vulnbot-path", default=os.getenv("VULNBOT_PATH"),

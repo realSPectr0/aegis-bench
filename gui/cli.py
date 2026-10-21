@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive Clanker Gauntlet terminal. Run: python gui/cli.py"""
+"""Interactive AegisBench terminal. Run: python gui/cli.py"""
 import argparse
 import curses
 import json
@@ -207,7 +207,7 @@ class Terminal:
     def draw_header(self, width):
         """Render the top header bar."""
         self.put(0, 0, ' ' * width, C_HEADER_BG)
-        self.put(0, 1, ' CLANKER GAUNTLET ', C_HEADER_BG, True)
+        self.put(0, 1, ' AEGISBENCH ', C_HEADER_BG, True)
         status = self.active_status()
         if status == 'RUNNING':
             self.spin_frame = (self.spin_frame + 1) % len(SYM_SPINNER)
@@ -1548,7 +1548,7 @@ def headless_run(args):
         judge_label += ' (Anthropic API)' if os.environ.get('ANTHROPIC_API_KEY') else ' (Claude CLI)'
     elif judge_provider == 'claude-cli':
         judge_label += ' (Claude CLI)'
-    print(f'Clanker Gauntlet \u2014 headless run', flush=True)
+    print(f'AegisBench \u2014 headless run', flush=True)
     print(f'Model    : {args.model}', flush=True)
     print(f'Endpoint : {args.base_url}', flush=True)
     print(f'Judge    : {judge_label}', flush=True)

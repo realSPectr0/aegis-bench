@@ -167,7 +167,7 @@ class Report(BaseDocTemplate):
     def __init__(self, path, run):
         super().__init__(str(path), pagesize=LETTER, leftMargin=0.75 * inch, rightMargin=0.75 * inch,
                          topMargin=0.8 * inch, bottomMargin=0.75 * inch,
-                         title=f'Clanker Gauntlet — {run["model"]}', author='Clanker Gauntlet')
+                         title=f'AegisBench — {run["model"]}', author='AegisBench')
         self.run = run
         frame = Frame(self.leftMargin, self.bottomMargin, self.width, self.height, id='body')
         self.addPageTemplates([PageTemplate('page', [frame], onPage=self.decorate)])
@@ -178,7 +178,7 @@ class Report(BaseDocTemplate):
         canvas.setFillColor(MUTED)
         top = LETTER[1] - 0.5 * inch
         if doc.page > 1:
-            canvas.drawString(self.leftMargin, top, f'Clanker Gauntlet  ·  {self.run["model"]}')
+            canvas.drawString(self.leftMargin, top, f'AegisBench  ·  {self.run["model"]}')
             canvas.drawRightString(LETTER[0] - self.rightMargin, top, self.run['date'][:10])
             canvas.setStrokeColor(RULE)
             canvas.line(self.leftMargin, top - 4, LETTER[0] - self.rightMargin, top - 4)
@@ -233,7 +233,7 @@ def case_index(number, part):
 
 
 def cover(run):
-    story = [Spacer(1, 1.3 * inch), Paragraph('Clanker Gauntlet', S['cover']),
+    story = [Spacer(1, 1.3 * inch), Paragraph('AegisBench', S['cover']),
              Paragraph('Benchmark results report', S['subtitle']), Spacer(1, 0.35 * inch)]
     info = [('Target model', run['model']), ('Run date', run['date'][:19].replace('T', ' ') + ' UTC'),
             ('Endpoint', run['endpoint'] or 'n/a'), ('Judge', run['judge'] or 'n/a'),

@@ -211,11 +211,11 @@ def assessment_section(assessment):
 def build(run, out, assessment=None):
     out = Path(out)
     doc = Report(out, run)
-    doc.title = f'Clanker Gauntlet summary — {run["model"]}'
+    doc.title = f'AegisBench summary — {run["model"]}'
 
     meta = [run['model'], run['date'][:16].replace('T', ' ') + ' UTC', f'judge {run["judge"] or "n/a"}',
             f'total {seconds(run["total_seconds"])}']
-    story = [Paragraph('Clanker Gauntlet — summary', S_TITLE),
+    story = [Paragraph('AegisBench — summary', S_TITLE),
              Paragraph(escape('  ·  '.join(meta)), S['muted']),
              Paragraph(f'Generated {datetime.now():%Y-%m-%d %H:%M}. Full transcripts, thinking and judge '
                        f'rationales are in the full report.', S['muted']),
