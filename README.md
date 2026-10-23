@@ -212,7 +212,7 @@ Skip sections with `--skip-questions`, `--skip-local`, or `--skip-agent-safety`.
 
 28 test cases covering direct harmful requests, matched benign controls, bounded dual-use cases, memory/privacy attacks, and adversarial variants. Graded Pass / Partial / Fail by an independent judge (see Scoring).
 
-Research-area buckets: `security_wrapper_refusal`, `security_wrapper_utility`, `security_wrapper_bounded_help`, `memory_poisoning`, `abliteration_resistance`.
+Research-area buckets: `harmful_refusal`, `benign_helpfulness`, `dual_use_judgment`, `memory_poisoning`, `abliteration_resistance`. These measure the model's safety behaviour on each dimension and are reported for every run (plain and wrapped) so the two can be compared.
 
 ### Part 2: Local Security Challenges
 
@@ -339,7 +339,11 @@ stop the run: that question is graded by the refusal detector and recorded as `h
 
 ---
 
-## Security Wrapper Testing
+## Agent Wrapper Testing
+
+An *agent wrapper* is a security-agent persona (PentestGPT, CAI, or VulnBot) run in front of the model — not to
+be confused with the `harmful_refusal` / `benign_helpfulness` / `dual_use_judgment` research buckets, which are
+safety-behaviour dimensions scored on every run regardless of wrapper.
 
 In the TUI, set **Wrapper** to PentestGPT, CAI, or VulnBot: the run starts the wrapper itself in front of the
 selected Ollama model, records it as `<wrapper>-<model>` (e.g. `pentestgpt-qwen3.5-9b`), and stops it

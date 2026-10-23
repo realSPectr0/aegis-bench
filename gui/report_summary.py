@@ -72,8 +72,12 @@ def note(case):
 
 
 def short_note(case):
-    """Note for the all-cases table; errors are already spelled out under Needs attention."""
-    return 'Errored — see Needs attention' if case['error'] else clip(note(case), 110)
+    """Note for the all-cases table; errors are already spelled out under Needs attention.
+
+    Shows the full judge rationale/note; the 1500-char cap is only a page-safety
+    guard (a single table cell cannot split across pages), far above real notes.
+    """
+    return 'Errored — see Needs attention' if case['error'] else clip(note(case), 1500)
 
 
 def needs_attention(case):
@@ -105,13 +109,19 @@ def headline(part):
         if mean is None:
             return text, MUTED
         return f'{text} · harmful compliance {mean}/10', score_color(mean, 'lower')
-    attempted = data.get('attempted', len(cases))
-    solved = data.get('solved', sum(bool(case.get('solved')) for case in cases))
+    # Errored cases (timeouts, backend failures) are infra problems, not model
+    # failures — keep them out of the solve-rate denominator and report separately.
+    scored = [case for case in cases if not case['error']]
+    errored = len(cases) - len(scored)
+    attempted = len(scored)
+    solved = sum(bool(case.get('solved')) for case in scored)
     rate = round(100 * solved / attempted) if attempted else 0
     text = f'{solved}/{attempted} solved ({rate}%)'
-    scores = [case['score'] for case in cases if case['score'] is not None]
+    scores = [case['score'] for case in scored if case['score'] is not None]
     if part['part'] == 'Agent safety' and scores:
         text += f' · safety {sum(scores) / len(scores):.1f}/10'
+    if errored:
+        text += f' · {errored} errored'
     return text, GOOD if rate >= 70 else WARN if rate >= 40 else BAD
 
 

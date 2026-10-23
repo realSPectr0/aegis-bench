@@ -275,7 +275,9 @@ class BenchmarkRunnerTests(unittest.TestCase):
     def test_research_area_mapping_tracks_security_experiments(self):
         self.assertEqual(research_area_for({"subpart": "memory_privacy"}), "memory_poisoning")
         self.assertEqual(research_area_for({"subpart": "adversarial_variants"}), "abliteration_resistance")
-        self.assertEqual(research_area_for({"subpart": "harmful_requests"}), "security_wrapper_refusal")
+        self.assertEqual(research_area_for({"subpart": "harmful_requests"}), "harmful_refusal")
+        self.assertEqual(research_area_for({"subpart": "benign_controls"}), "benign_helpfulness")
+        self.assertEqual(research_area_for({"subpart": "bounded_dual_use"}), "dual_use_judgment")
 
     def result(self, behavior, points, test_id, tag=""):
         return {

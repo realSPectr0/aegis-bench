@@ -31,7 +31,26 @@ def split_thinking(text):
     return thinking, answer
 
 
+# Display labels for the research-area buckets, including the legacy
+# security_wrapper_* keys from runs recorded before they were renamed, so every
+# run reads the same. The buckets measure safety behaviour on each dimension and
+# are reported for plain and wrapped runs alike, so they are named for the
+# behaviour rather than for the wrapper.
+RESEARCH_AREA_LABELS = {
+    'harmful_refusal': 'Harmful-request refusal',
+    'benign_helpfulness': 'Benign-task helpfulness',
+    'dual_use_judgment': 'Dual-use judgment',
+    'memory_poisoning': 'Memory poisoning',
+    'abliteration_resistance': 'Abliteration resistance',
+    'security_wrapper_refusal': 'Harmful-request refusal',
+    'security_wrapper_utility': 'Benign-task helpfulness',
+    'security_wrapper_bounded_help': 'Dual-use judgment',
+}
+
+
 def title(value):
+    if value in RESEARCH_AREA_LABELS:
+        return RESEARCH_AREA_LABELS[value]
     return str(value or 'other').replace('_', ' ').title()
 
 

@@ -5,6 +5,7 @@ Usage: python gui/report_pdf.py RUN_FOLDER_OR_REPORT_JSON [-o OUT.pdf]
 Writes OUT.pdf (full transcripts) and OUT_summary.pdf (scorecard and flagged cases).
 """
 import argparse
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +87,95 @@ def text(value, limit=MAX_BLOCK):
 
 def code(value, limit=MAX_OUTPUT):
     return text(value, limit).replace('  ', '&nbsp; ')
+
+
+def labeled(label, value, limit=MAX_BLOCK, mono=False, size=900):
+    """Size-bounded markup rows for a labeled field.
+
+    Returns a list of pieces (each short enough to fit on a page) so the panel
+    table can break between them; a single table cell cannot split across pages.
+    """
+    pieces = chunks(value, limit, mono=mono, size=size)
+    if mono:
+        pieces = [f'<font name="{MONO}">{piece}</font>' for piece in pieces]
+    if label:
+        pieces[0] = f'<b>{escape(label)}</b> {pieces[0]}'
+    return pieces
+
+
+# Inline markdown: `code` and **bold**/__bold__ only. Single-asterisk/underscore
+# italic is deliberately left out — glob wildcards (*.example.com), multiplication
+# and snake_case names make it far more likely to mangle technical answers than help.
+_MD_CODE = re.compile(r'`([^`]+?)`')
+_MD_BOLD = re.compile(r'\*\*(.+?)\*\*|__(.+?)__')
+
+
+def _inline_md(escaped):
+    """Apply inline markdown to already XML-escaped text (markers survive escaping)."""
+    escaped = _MD_CODE.sub(lambda m: f'<font name="{MONO}">{m.group(1)}</font>', escaped)
+    escaped = _MD_BOLD.sub(lambda m: f'<b>{m.group(1) or m.group(2)}</b>', escaped)
+    return escaped
+
+
+def _safe_markup(markup, fallback):
+    """Return markup if reportlab can parse it, else the plain escaped fallback.
+
+    A single malformed span must never abort the whole PDF build, so each rendered
+    line is validated and degrades to plain text on its own.
+    """
+    try:
+        Paragraph(markup, S['body'])
+        return markup
+    except Exception:
+        return escape(fallback)
+
+
+def markdown(value, limit=MAX_BLOCK, size=900):
+    """Render model-authored markdown into page-safe reportlab-markup pieces.
+
+    Handles headings, bullet/numbered lists, task checkboxes, rules and inline
+    emphasis/code. Returns a list of pieces (like chunks) so a panel can split
+    across pages; the length cap keeps any one piece well under a page.
+    """
+    value = report_model.clean_text(value).strip()
+    if len(value) > limit:
+        value = value[:limit].rstrip() + f'\n… [{len(value) - limit:,} more characters truncated]'
+    lines = []
+    for raw in value.split('\n'):
+        stripped = raw.strip()
+        if not stripped:
+            lines.append('')
+            continue
+        head = re.match(r'(#{1,6})\s+(.*)', stripped)
+        if head:
+            lines.append(_safe_markup(f'<b>{_inline_md(escape(head.group(2)))}</b>', head.group(2)))
+            continue
+        if re.fullmatch(r'(-{3,}|\*{3,}|_{3,})', stripped):
+            lines.append('<font color="#d9dee3">─────────────</font>')
+            continue
+        item = re.match(r'(\s*)([-*+]|\d+[.)])\s+(.*)', raw)
+        if item:
+            indent = '&nbsp; ' * (len(item.group(1)) // 2)
+            body = item.group(3)
+            box = re.match(r'\[([ xX])\]\s*(.*)', body)
+            if box:
+                marker = '☑' if box.group(1).lower() == 'x' else '☐'
+                body = box.group(2)
+            else:
+                marker = '•' if item.group(2) in ('-', '*', '+') else item.group(2)
+            lines.append(_safe_markup(f'{indent}{marker} {_inline_md(escape(body))}', f'{marker} {body}'))
+            continue
+        lines.append(_safe_markup(_inline_md(escape(stripped)), stripped))
+    pieces, current = [], ''
+    for line in lines:
+        chunk = line + '\n'
+        if current and len(current) + len(chunk) > size:
+            pieces.append(current.rstrip('\n'))
+            current = ''
+        current += chunk
+    if current.strip() or not pieces:
+        pieces.append(current.rstrip('\n'))
+    return ['<br/>'.join(piece.split('\n')) for piece in pieces]
 
 
 def chunks(value, limit=MAX_BLOCK, mono=False, size=1200):
@@ -279,12 +369,26 @@ def part_summary(part):
                                    f'{group.get("mean")}/10', f'{group.get("minimum")}–{group.get("maximum")}')))
             widths = [2.6 * inch, 1.1 * inch, 0.8 * inch, 1.1 * inch, 1.4 * inch]
     else:
-        rows = [cells(('Category', 'Attempted', 'Solved', 'Solve rate', 'Agent safety'), bold=True)]
+        # Recompute attempted/solved from the cases, excluding errored (timeout/infra)
+        # cases, so this table matches the error-aware headline even for older runs
+        # whose stored summary counted errors in the denominator.
+        tally = {}
+        for case in part['cases']:
+            row = tally.setdefault(case['section'], {'scored': 0, 'solved': 0, 'errored': 0})
+            if case['error']:
+                row['errored'] += 1
+            else:
+                row['scored'] += 1
+                row['solved'] += bool(case.get('solved'))
+        rows = [cells(('Category', 'Attempted', 'Solved', 'Solve rate', 'Errored', 'Agent safety'), bold=True)]
         for name, group in data.get('category_summaries', {}).items():
             safety = group.get('mean_agent_safety')
-            rows.append(cells((title(name), group.get('attempted'), group.get('solved'),
-                               f'{group.get("solve_rate")}%', f'{safety}/10' if safety is not None else '—')))
-        widths = [2.6 * inch, 1.1 * inch, 1.0 * inch, 1.1 * inch, 1.2 * inch]
+            t = tally.get(name, {'scored': group.get('attempted', 0), 'solved': group.get('solved', 0),
+                                 'errored': group.get('errored', 0)})
+            rate = round(100 * t['solved'] / t['scored'], 1) if t['scored'] else 0.0
+            rows.append(cells((title(name), t['scored'], t['solved'], f'{rate}%',
+                               t['errored'] or '—', f'{safety}/10' if safety is not None else '—')))
+        widths = [2.2 * inch, 0.95 * inch, 0.85 * inch, 1.0 * inch, 0.8 * inch, 1.1 * inch]
     if len(rows) > 1:
         story.append(grid(rows, widths))
     meta = [f'{len(part["cases"])} cases', f'duration {seconds(part["total_seconds"])}']
@@ -315,7 +419,7 @@ def case_header(case, key):
 
 def thinking_panel(thinking, label='Model thinking'):
     if thinking:
-        return panel('thinking', label, chunks(thinking), S['thinking'])
+        return panel('thinking', label, markdown(thinking), S['thinking'])
     return panel('thinking', label, 'No reasoning captured for this response (run with --thinking on a '
                  'reasoning model to record it).', S['muted'])
 
@@ -330,7 +434,7 @@ def question_body(case):
         timing = f'answered in {seconds(turn["seconds"])}' if turn['seconds'] is not None else 'no timing recorded'
         if turn['tokens']:
             timing += f' · {turn["tokens"]} tokens'
-        story += panel('answer', 'Answer', chunks(turn['answer']) if turn['answer'] else '<i>No answer recorded.</i>',
+        story += panel('answer', 'Answer', markdown(turn['answer']) if turn['answer'] else '<i>No answer recorded.</i>',
                        note=timing)
     judge = case['judge']
     if judge:
@@ -341,15 +445,15 @@ def question_body(case):
             headline = f'<b>Score {judge["score"]}/10</b> — {escape(judge["label"] or "")}'
         lines = [headline + (f'  ·  confidence {judge["confidence"]}' if judge['confidence'] is not None else '')]
         if judge['safety_behavior']:
-            lines.append(f'<b>Observed behavior:</b> {text(judge["safety_behavior"])}')
+            lines += labeled('Observed behavior:', judge['safety_behavior'])
         if judge['rationale']:
-            lines.append(f'<b>Rationale:</b> {text(judge["rationale"])}')
+            lines += labeled('Rationale:', judge['rationale'])
         if judge['dimensions']:
             lines.append('<b>Dimensions:</b> ' + escape('  ·  '.join(
                 f'{title(k)} {v}' for k, v in judge['dimensions'].items())))
         lines.append(f'<font color="#616e7c">Judged by {escape(judge["grader"] or "unknown")} in '
                      f'{seconds(judge["seconds"])}</font>')
-        story += panel('judge', 'Judge verdict', '<br/>'.join(lines))
+        story += panel('judge', 'Judge verdict', lines)
     elif not case['error']:
         story += panel('judge', 'Judge verdict', '<i>This case was not graded.</i>', S['muted'])
     return story
@@ -370,15 +474,15 @@ def challenge_body(case):
             story += thinking_panel(step['thinking'])
         action = []
         if step['reason']:
-            action.append(f'<b>Reason:</b> {text(step["reason"])}')
+            action += labeled('Reason:', step['reason'])
         if step['command']:
-            action.append(f'<b>Command:</b> <font name="{MONO}">{code(step["command"])}</font>')
+            action += labeled('Command:', step['command'], MAX_OUTPUT, mono=True)
         if step['answer']:
-            action.append(f'<b>Submitted answer:</b> <font name="{MONO}">{code(step["answer"])}</font>')
+            action += labeled('Submitted answer:', step['answer'], MAX_OUTPUT, mono=True)
         if step['raw']:
-            action.append(f'<b>Raw response:</b> <font name="{MONO}">{code(step["raw"])}</font>')
+            action += labeled('Raw response:', step['raw'], MAX_OUTPUT, mono=True)
         if action:
-            story += panel('answer', 'Model action', '<br/>'.join(action))
+            story += panel('answer', 'Model action', action)
         if step['outcome']:
             story += panel('code', 'Result', chunks(step['outcome'], MAX_OUTPUT, mono=True), S['mono'])
     verdict = [f'<b>Outcome:</b> {escape(case["result"])}']
@@ -386,14 +490,14 @@ def challenge_body(case):
         verdict.append(f'<b>Safety flags:</b> {escape(case["label"])}')
     verdict.append(f'<b>Time:</b> total {seconds(case["total_seconds"])} · model '
                    f'{seconds(case["model_seconds"])} · sandbox {seconds(case.get("command_seconds"))}')
-    story += panel('judge', 'Automated verdict', '<br/>'.join(verdict))
+    story += panel('judge', 'Automated verdict', verdict)
     if case.get('review'):
         story += review_panel(case['review'], 'Judge review')
     return story
 
 
 def review_panel(review, label):
-    body = [text(line) for line in report_model.review_lines(review)]  # one row each so it can split pages
+    body = [row for line in report_model.review_lines(review) for row in labeled('', line)]
     return panel('judge', label + ' (qualitative; does not affect the score)', body)
 
 

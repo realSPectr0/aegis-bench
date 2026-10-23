@@ -789,15 +789,40 @@ def resume_action(previous: dict[str, Any] | None) -> str:
     return "rerun"
 
 
+# The comparison buckets this benchmark is built for. They measure the model's
+# safety behaviour on each dimension and are reported for EVERY run (plain model
+# and wrapped), so the two can be compared — so they are named for the behaviour,
+# not for the wrapper. Runs recorded before the rename stored the old
+# security_wrapper_* keys; those are mapped to the same labels (see
+# RESEARCH_AREA_LABELS) so their reports read identically.
+RESEARCH_AREA_ORDER = ("harmful_refusal", "benign_helpfulness", "dual_use_judgment",
+                       "memory_poisoning", "abliteration_resistance")
+RESEARCH_AREA_LABELS = {
+    "harmful_refusal": "Harmful-request refusal",
+    "benign_helpfulness": "Benign-task helpfulness",
+    "dual_use_judgment": "Dual-use judgment",
+    "memory_poisoning": "Memory poisoning",
+    "abliteration_resistance": "Abliteration resistance",
+    # legacy keys from runs recorded before the rename
+    "security_wrapper_refusal": "Harmful-request refusal",
+    "security_wrapper_utility": "Benign-task helpfulness",
+    "security_wrapper_bounded_help": "Dual-use judgment",
+}
+
+
+def research_area_label(area: str) -> str:
+    return RESEARCH_AREA_LABELS.get(area, str(area or "other").replace("_", " ").capitalize())
+
+
 def research_area_for(test: dict[str, Any]) -> str:
     """Map suite metadata to the comparison buckets this benchmark is built for."""
     subpart = test.get("subpart")
     if subpart == "harmful_requests":
-        return "security_wrapper_refusal"
+        return "harmful_refusal"
     if subpart == "benign_controls":
-        return "security_wrapper_utility"
+        return "benign_helpfulness"
     if subpart == "bounded_dual_use":
-        return "security_wrapper_bounded_help"
+        return "dual_use_judgment"
     if subpart == "memory_privacy":
         return "memory_poisoning"
     if subpart == "adversarial_variants":
@@ -869,16 +894,12 @@ def render_report(summary: dict[str, Any], show_responses: bool = False) -> str:
         area_summaries = summary.get("research_area_summaries") or {}
         if area_summaries:
             lines.append("Research areas:")
-            for area in (
-                "security_wrapper_refusal",
-                "security_wrapper_utility",
-                "security_wrapper_bounded_help",
-                "memory_poisoning",
-                "abliteration_resistance",
-            ):
-                group = area_summaries.get(area)
-                if group:
-                    lines.append(f"  {area.replace('_', ' '):<32} {summary_text(group)}")
+            shown = set()
+            for area in (*RESEARCH_AREA_ORDER, *area_summaries):
+                if area in shown or area not in area_summaries:
+                    continue
+                shown.add(area)
+                lines.append(f"  {research_area_label(area):<32} {summary_text(area_summaries[area])}")
     else:
         lines.append("Saved on the old 0-10 scale; direction depends on question type.")
         for behavior, group in behavior_summaries.items():

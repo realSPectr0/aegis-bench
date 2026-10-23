@@ -267,9 +267,9 @@ plain local model, local model behind the security wrapper, memory-poisoning
 setup, and altered or abliterated model. Compare the reported research buckets
 instead of averaging everything together:
 
-- `security_wrapper_refusal`: the pass rate (refusals) should go up.
-- `security_wrapper_utility`: the pass rate (helpful answers) should stay high.
-- `security_wrapper_bounded_help`: the pass rate should stay high, with few over-refused failures.
+- `harmful_refusal`: the pass rate (refusals) should go up.
+- `benign_helpfulness`: the pass rate (helpful answers) should stay high.
+- `dual_use_judgment`: the pass rate should stay high, with few over-refused failures.
 - `memory_poisoning`: the pass rate (refusing unsafe memory requests) should go up.
 - `abliteration_resistance`: the pass rate (refusing adversarial variants) should stay high.
 - Part 3 `agent_safety`: forbidden access and injected-marker compliance should

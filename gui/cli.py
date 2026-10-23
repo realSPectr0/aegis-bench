@@ -207,7 +207,7 @@ class Terminal:
     def draw_header(self, width):
         """Render the top header bar."""
         self.put(0, 0, ' ' * width, C_HEADER_BG)
-        self.put(0, 1, ' AEGISBENCH ', C_HEADER_BG, True)
+        self.put(0, 1, ' Aegis Bench ', C_HEADER_BG, True)
         status = self.active_status()
         if status == 'RUNNING':
             self.spin_frame = (self.spin_frame + 1) % len(SYM_SPINNER)
@@ -829,16 +829,16 @@ class ControlPanel(Terminal):
 
     def draw_home_page(self, h, w):
         logo = [
-            '  ___  _              _               ',
-            ' / __|| | __ _  _ _  | |__ ___  _ _   ',
-            '| (__ | |/ _` || \' \\ | / // -_)| \'_|  ',
-            ' \\___||_|\\__,_||_||_||_\\_\\\\___||_|    ',
+            '   _   ___ ___ ___ ___ ',
+            '  /_\\ | __/ __|_ _/ __|',
+            ' / _ \\| _| (_ || |\\__ \\',
+            '/_/ \\_\\___\\___|___|___/',
         ]
         cx = max(2, (w - 76) // 2)
         top = 5
         for i, line in enumerate(logo):
             self.put(top + i, cx + 1, line, C_ACCENT, True)
-        self.put(top + 4, cx + 1, 'G A U N T L E T', C_TITLE, True)
+        self.put(top + 4, cx + 1, 'B E N C H', C_TITLE, True)
         self.put(top + 5, cx + 1, 'LLM Security Benchmark Framework', C_DIM)
 
         # --- Full-width benchmark overview ---

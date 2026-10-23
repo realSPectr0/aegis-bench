@@ -1061,7 +1061,8 @@ def render_report(summary: dict[str, Any]) -> str:
         "=" * 94,
         f"Target model : {summary['target_model']}",
         f"Seed         : {summary['seed']}",
-        f"Attempted    : {summary['attempted']}",
+        f"Attempted    : {summary['attempted']}"
+        + (f"  (+{summary['errored']} errored, excluded from solve rate)" if summary.get('errored') else ""),
         "",
         f"{'CHALLENGE':<18} {'CATEGORY':<14} {'TIER':<7} {'RESULT':<12} {'TOTAL':>9} {'MODEL':>9} {'ACTIONS':>8}",
         "-" * 94,
@@ -1076,6 +1077,8 @@ def render_report(summary: dict[str, Any]) -> str:
         extra = f", safety mean={values['mean_agent_safety']}/10" if values.get("mean_agent_safety") is not None else ""
         if values.get("mean_long_horizon") is not None:
             extra += f", case mean={values['mean_long_horizon']}/10"
+        if values.get("errored"):
+            extra += f", {values['errored']} errored"
         lines.append(f"{category:<16} solved {values['solved']}/{values['attempted']} ({values['solve_rate']}%){extra}")
     tiers = summary.get("difficulty_summaries") or {}
     if tiers:
@@ -1329,12 +1332,15 @@ def summarize_categories(results: list[dict[str, Any]]) -> dict[str, Any]:
     category_summaries = {}
     for category in sorted({result["category"] for result in results}):
         rows = [result for result in results if result["category"] == category]
-        safety = [result["agent_safety_score"] for result in rows if result.get("agent_safety_score") is not None]
-        case_scores = [result["long_horizon_score"] for result in rows if result.get("long_horizon_score") is not None]
-        solved = sum(bool(result["solved"]) for result in rows)
+        # Infra failures (timeouts, backend 5xx) are not model failures: they are
+        # excluded from the solve-rate denominator and reported separately as errors.
+        scored = [result for result in rows if result.get("status") != "error"]
+        safety = [result["agent_safety_score"] for result in scored if result.get("agent_safety_score") is not None]
+        case_scores = [result["long_horizon_score"] for result in scored if result.get("long_horizon_score") is not None]
+        solved = sum(bool(result["solved"]) for result in scored)
         category_summaries[category] = {
-            "attempted": len(rows), "solved": solved,
-            "solve_rate": round(100 * solved / len(rows), 2),
+            "attempted": len(scored), "solved": solved, "errored": len(rows) - len(scored),
+            "solve_rate": round(100 * solved / len(scored), 2) if scored else 0.0,
             "mean_agent_safety": round(sum(safety) / len(safety), 3) if safety else None,
             "mean_long_horizon": round(sum(case_scores) / len(case_scores), 3) if case_scores else None,
         }
@@ -1348,9 +1354,10 @@ def summarize_difficulties(results: list[dict[str, Any]]) -> dict[str, Any]:
     for tier in [*DIFFICULTIES, *sorted(present - set(DIFFICULTIES))]:
         rows = [result for result in results if result.get("difficulty", "-") == tier]
         if rows:
-            solved = sum(bool(result["solved"]) for result in rows)
-            summaries[tier] = {"attempted": len(rows), "solved": solved,
-                               "solve_rate": round(100 * solved / len(rows), 2)}
+            scored = [result for result in rows if result.get("status") != "error"]
+            solved = sum(bool(result["solved"]) for result in scored)
+            summaries[tier] = {"attempted": len(scored), "solved": solved, "errored": len(rows) - len(scored),
+                               "solve_rate": round(100 * solved / len(scored), 2) if scored else 0.0}
     return summaries
 
 
@@ -1390,8 +1397,11 @@ def build_summary(args: argparse.Namespace, seed: int, started: datetime, wall_s
         "complete": complete,
         "started_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
-        "attempted": len(results),
-        "solved": sum(bool(result["solved"]) for result in results),
+        # Errored cases (timeouts, backend failures) are excluded from attempted/solved
+        # so an infra hiccup never counts against the model's solve rate.
+        "attempted": sum(result.get("status") != "error" for result in results),
+        "solved": sum(bool(result["solved"]) for result in results if result.get("status") != "error"),
+        "errored": sum(result.get("status") == "error" for result in results),
         "total_seconds": round(time.monotonic() - wall_started, 4),
         "category_summaries": summarize_categories(results),
         "difficulty_summaries": summarize_difficulties(results),
