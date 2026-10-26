@@ -852,73 +852,88 @@ class ControlPanel(Terminal):
         return lines
 
     def draw_home_page(self, h, w):
-        cx = max(2, (w - 84) // 2)
-        top = 5
-        title = ' AEGISBENCH '
-        rule_w = min(82, w - 2 * cx)
-        self.put(top, cx, '━' * rule_w, C_ACCENT)
-        self.put(top + 1, cx, title, C_TITLE, True)
-        self.put(top + 1, cx + len(title), 'RESEARCH CONSOLE', C_FIELD_LBL, True)
-        self.put(top + 2, cx, 'Independent evaluations  /  auditable evidence  /  local-first execution', C_DIM)
-        self.put(top + 3, cx, '━' * rule_w, C_ACCENT)
+        # A capped-width content column with a comfortable left margin, rather than a narrow
+        # block floating in the middle of a wide terminal.
+        total_w = min(112, w - 8)
+        cx = max(4, (w - total_w) // 2)
+        top = 4
+        # Hero: the header bar already carries the product name, so the body leads with a
+        # single clean wordmark + tagline and one thin accent rule (no heavy double rules).
+        self.put(top, cx, 'AEGISBENCH', C_TITLE, True)
+        self.put(top, cx + 11, 'LLM SECURITY EVALUATION', C_FIELD_LBL)
+        self.put(top + 1, cx, f'Independent {SYM_DOT} auditable {SYM_DOT} local-first evaluation of model security behavior', C_DIM)
+        self.put(top + 2, cx, BD_H * total_w, C_ACCENT)
 
-        # --- Full-width benchmark overview ---
-        card_top = top + 6
-        total_w = min(84, w - cx - 2)
-        left_w = max(30, total_w // 2)
+        # --- Two balanced overview cards ---
+        card_top = top + 4
+        left_w = max(34, (total_w - 2) * 5 // 9)   # give the catalog a little more room
         right_w = total_w - left_w - 2
-        card_h = 20 if h > 44 else min(h - card_top - 10, 15)
+        # Tall enough to show the full catalog, but always leaving room for the menu below.
+        card_h = max(12, min(h - card_top - 11, 22))
+        bottom = card_top + card_h - 1
 
-        # Left card: System Status
+        def field(y, x, label, value, vcolor=C_FIELD_VAL, width=left_w):
+            self.put(y, x + 3, label, C_FIELD_LBL)
+            self.put(y, x + 16, str(value)[:max(0, width - 19)], vcolor)
+
+        # Left card: environment + current run configuration (so it reads at a glance).
         self.box(card_top, cx, card_h, left_w, '01  ENVIRONMENT')
         ollama_ok = len(self.models) > 0
-        self.put(card_top + 2, cx + 3, f'{SYM_CHECK if ollama_ok else SYM_CROSS} Ollama',
+        ey = card_top + 2
+        self.put(ey, cx + 3, f'{SYM_CHECK if ollama_ok else SYM_CROSS} Ollama',
                  C_SUCCESS if ollama_ok else C_ERROR)
-        self.put(card_top + 2, cx + 16, f'{len(self.models)} models' if ollama_ok else 'offline', C_DIM)
-
-        loaded_count = len(self.loaded)
-        self.put(card_top + 3, cx + 3, f'{SYM_DOT} VRAM', C_FIELD_LBL)
-        self.put(card_top + 3, cx + 16, f'{loaded_count} loaded', C_DIM)
-        for i, model in enumerate(self.loaded[:3]):
-            if card_top + 4 + i < card_top + card_h - 3:
-                mem = f'{model["size"]/1024**3:.1f}G'
-                self.put(card_top + 4 + i, cx + 5, model['name'][:left_w - 16], C_FIELD_VAL)
-                self.put(card_top + 4 + i, cx + left_w - len(mem) - 3, mem, C_DIM)
-
+        self.put(ey, cx + 16, f'{len(self.models)} models {SYM_DOT} {len(self.loaded)} loaded'
+                 if ollama_ok else 'offline', C_DIM)
+        ey += 1
+        for model in self.loaded[:2]:
+            if ey < bottom - 8:
+                mem = f'{model["size"] / 1024 ** 3:.1f}G'
+                self.put(ey, cx + 5, model['name'][:left_w - 14], C_FIELD_VAL)
+                self.put(ey, cx + left_w - len(mem) - 3, mem, C_DIM)
+                ey += 1
+        self.hline(ey, cx + 2, left_w - 4); ey += 1
+        field(ey, cx, 'Model', self.config['model']); ey += 1
+        field(ey, cx, 'Endpoint', self.config['endpoint']); ey += 1
+        field(ey, cx, 'Wrapper', 'off (direct)' if self.stack == 'Ollama' else self.stack); ey += 1
+        field(ey, cx, 'Seed', self.config['seed']); ey += 1
+        field(ey, cx, 'Max actions', self.config['actions']); ey += 1
+        self.hline(ey, cx + 2, left_w - 4); ey += 1
         status = self.active_status()
-        row_s = min(card_top + 4 + min(loaded_count, 3) + 1, card_top + card_h - 3)
-        self.hline(row_s - 1, cx + 2, left_w - 4)
         sym, sc = {
             'RUNNING': (SYM_RUNNING, C_STATUS_RUN), 'COMPLETE': (SYM_CHECK, C_STATUS_OK),
             'FAILED': (SYM_CROSS, C_ERROR), 'STOPPED': (SYM_DASH, C_WARN),
         }.get(status, (SYM_IDLE, C_DIM))
-        if row_s < card_top + card_h - 1:
-            self.put(row_s, cx + 3, f'{sym} Benchmark {status.lower()}', sc)
-        if self.rows and row_s + 1 < card_top + card_h - 1:
-            self.put(row_s + 1, cx + 3, f'{len(self.rows)} reports saved', C_DIM)
+        if ey < bottom:
+            self.put(ey, cx + 3, f'{sym} Benchmark {status.lower()}', sc)
+            self.put(ey, cx + left_w - len(f'{len(self.rows)} reports') - 3,
+                     f'{len(self.rows)} reports', C_DIM)
 
-        # Right card: What's in the benchmark
+        # Right card: what the benchmark contains, with a "+N more" guard on overflow.
         rx = cx + left_w + 2
         if right_w >= 24:
             self.box(card_top, rx, card_h, right_w, '02  TEST CATALOG')
             ry = card_top + 2
             total, parts = benchmark_overview()
-            self.put(ry, rx + 3, f'{total} total test cases', C_FIELD_VAL)
-            ry += 1
-            self.hline(ry, rx + 2, right_w - 4)
-            ry += 1
-
+            self.put(ry, rx + 3, f'{total} total test cases', C_FIELD_VAL); ry += 1
+            self.hline(ry, rx + 2, right_w - 4); ry += 1
+            # Reserve the last interior line for a "+N more" note only when content overflows.
+            needed = sum(1 + len(items) for _, items in parts)
+            limit = bottom - (1 if needed > (bottom - ry) else 0)
+            hidden = 0
             for title, items in parts:
-                if ry >= card_top + card_h - 1:
-                    break
-                self.put(ry, rx + 3, title, C_ACCENT)
-                ry += 1
+                if ry >= limit:
+                    hidden += 1 + len(items)
+                    continue
+                self.put(ry, rx + 3, title, C_ACCENT); ry += 1
                 for label, count in items:
-                    if ry >= card_top + card_h - 1:
-                        break
+                    if ry >= limit:
+                        hidden += 1
+                        continue
                     self.put(ry, rx + 5, label, C_DIM)
                     self.put(ry, rx + right_w - len(str(count)) - 3, str(count), C_FIELD_VAL)
                     ry += 1
+            if hidden:
+                self.put(limit, rx + 5, f'+{hidden} more categories {SYM_DOT} F1', C_WARN)
 
         # Navigation menu
         menu_top = card_top + card_h + 1
