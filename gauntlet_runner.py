@@ -113,6 +113,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Do not have Ollama enforce the JSON action format while generating")
     local.add_argument("--no-review", action="store_true",
                        help="Skip the judge's qualitative review of each challenge attempt")
+    local.add_argument("--run-memory-poisoning", action="store_true",
+                       help="Add Part 4: the cross-session memory-poisoning challenges "
+                            "(MPOISON-*), run under --condition. Off by default because each "
+                            "condition is a separate sweep.")
+    local.add_argument("--condition", choices=local_challenge_runner.MEMORY_CONDITIONS, default="clean",
+                       help="Memory-poisoning condition for Part 4 (clean | poisoned | safeguarded). "
+                            "Run the three as separate seed-matched sweeps to get the attack and "
+                            "defense gaps.")
     local.add_argument("--thinking", nargs="?", const=True, default=DEFAULT_THINKING,
                        help="Model reasoning level (default: %(default)s). "
                             "Use --thinking off to disable; a model with no reasoning "
@@ -162,6 +170,7 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
         "--model-timeout", str(args.model_timeout),
         "--harness", args.harness,
         "--num-ctx", str(args.num_ctx),
+        "--condition", args.condition,
     ]
     if args.no_structured_output:
         local_common.append("--no-structured-output")
@@ -196,6 +205,11 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
         if resume.get("agent_safety"):
             command.extend(["--resume-from", str(resume["agent_safety"])])
         commands.append(("Part 3 — Indirect Prompt Injection", command))
+    if args.run_memory_poisoning:
+        command = [*local_common, "--category", "memory_poisoning"]
+        if resume.get("memory_poisoning"):
+            command.extend(["--resume-from", str(resume["memory_poisoning"])])
+        commands.append((f"Part 4 — Memory Poisoning ({args.condition})", command))
     return commands
 
 
@@ -204,6 +218,13 @@ PART_KEYS = {
     "Part 2 — Local Security Challenges": "local",
     "Part 3 — Indirect Prompt Injection": "agent_safety",
 }
+
+
+def _part_key_for_title(title: str) -> str:
+    """Resume key for a part title (Part 4's title carries the condition, so match a prefix)."""
+    if title.startswith("Part 4 — Memory Poisoning"):
+        return "memory_poisoning"
+    return PART_KEYS[title]
 
 
 def find_part_reports(run_dir: Path) -> dict[str, Path]:
@@ -218,7 +239,13 @@ def find_part_reports(run_dir: Path) -> dict[str, Path]:
             found["questions"] = path
         elif data.get("benchmark_part") == "local_and_agent_safety" and data.get("results"):
             categories = {result.get("category") for result in data["results"]}
-            found["agent_safety" if categories == {"agent_safety"} else "local"] = path
+            if categories == {"memory_poisoning"}:
+                key = "memory_poisoning"
+            elif categories == {"agent_safety"}:
+                key = "agent_safety"
+            else:
+                key = "local"
+            found[key] = path
     return found
 
 
@@ -344,14 +371,14 @@ def main() -> int:
     commands = build_commands(args, run_dir)
     parts: list[dict[str, Any]] = []
     for name, _ in commands:
-        path = finished_parts.get(PART_KEYS[name])
+        path = finished_parts.get(_part_key_for_title(name))
         if path:
             parts.append({
                 "name": name, "exit_code": 0, "seconds": round(report_seconds(path), 4),
                 "reports": [str(p) for p in (path, path.with_suffix(".txt")) if p.exists()],
                 "metrics": summarize_child_report(path), "reused": True,
             })
-    commands = [(name, command) for name, command in commands if PART_KEYS[name] not in finished_parts]
+    commands = [(name, command) for name, command in commands if _part_key_for_title(name) not in finished_parts]
 
     if needs_judge(args) and commands:
         print(f"Checking the {args.judge_provider} judge before starting...", flush=True)
@@ -369,7 +396,7 @@ def main() -> int:
     if args.resume_run:
         print("Resuming     : " + ", ".join(
             f"{part['name']} (kept)" for part in parts) + (", " if parts else "") + ", ".join(
-            f"{name} ({'resumed' if PART_KEYS[name] in args.resume_reports else 'new'})" for name, _ in commands),
+            f"{name} ({'resumed' if _part_key_for_title(name) in args.resume_reports else 'new'})" for name, _ in commands),
             flush=True)
 
     for index, (name, command) in enumerate(commands, start=1):
@@ -379,7 +406,7 @@ def main() -> int:
         completed = subprocess.run(command, cwd=ROOT, check=False)
         reports_after = set(run_dir.glob("*.json")) | set(run_dir.glob("*.txt"))
         new_reports = sorted(reports_after - reports_before)
-        resumed = args.resume_reports.get(PART_KEYS[name]) if args.resume_run else None
+        resumed = args.resume_reports.get(_part_key_for_title(name)) if args.resume_run else None
         if resumed:
             # The local runner rewrites a resumed report in place, so it is not "new".
             new_reports = sorted({*new_reports, *(p for p in (resumed, resumed.with_suffix(".txt")) if p.exists())})
@@ -405,7 +432,7 @@ def main() -> int:
         "started_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "output_directory": str(run_dir),
-        "parts": sorted(parts, key=lambda part: list(PART_KEYS).index(part["name"])),
+        "parts": sorted(parts, key=lambda part: int(re.match(r"Part (\d+)", part["name"]).group(1))),
         "resumed": bool(args.resume_run),
         "complete": all(part["exit_code"] == 0 for part in parts),
     }

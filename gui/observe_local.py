@@ -21,8 +21,9 @@ def install():
         safe = json.loads(runner.redact_text(json.dumps(fields), state['sensitive']))
         emit(kind, state['id'], **safe)
 
-    def generate(challenge_id, workspace, seed):
-        challenge = original_generate(challenge_id, workspace, seed)
+    def generate(challenge_id, workspace, seed, condition="clean", memory_dir=None):
+        challenge = original_generate(challenge_id, workspace, seed,
+                                      condition=condition, memory_dir=memory_dir)
         state['id'] = challenge_id
         state['sensitive'] = [challenge.expected or '', *challenge.injection_markers]
         event('machine_start', category=challenge.category, goal=challenge.goal,

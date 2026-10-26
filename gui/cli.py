@@ -1526,6 +1526,8 @@ def headless_run(args):
         parts.append('local')
     if not args.skip_agent_safety:
         parts.append('agent-safety')
+    if getattr(args, 'memory_poisoning', False):
+        parts.append('memory-poisoning')
     if not parts:
         print('error: all parts skipped, nothing to run', file=sys.stderr)
         return 1
@@ -1540,6 +1542,7 @@ def headless_run(args):
         'seed': args.seed,
         'actions': args.actions,
         'parts': parts,
+        'condition': getattr(args, 'condition', 'clean'),
         'resume': getattr(args, 'resume', None),
         'wrapper': getattr(args, 'wrapper', None),
     }
@@ -1612,6 +1615,10 @@ def main():
     parser.add_argument('--skip-questions', action='store_true')
     parser.add_argument('--skip-local', action='store_true')
     parser.add_argument('--skip-agent-safety', action='store_true')
+    parser.add_argument('--memory-poisoning', action='store_true',
+                        help='Add Part 4: cross-session memory-poisoning challenges, run under --condition')
+    parser.add_argument('--condition', choices=('clean', 'poisoned', 'safeguarded'), default='clean',
+                        help='Memory-poisoning condition for Part 4 (run the three as separate sweeps)')
     parser.add_argument('--wrapper', choices=('pentestgpt', 'cai', 'vulnbot'),
                         help='Run the model behind a security wrapper, started automatically')
     parser.add_argument('--start', action='store_true',

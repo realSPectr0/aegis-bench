@@ -104,8 +104,11 @@ def launch(config):
     if not model or len(model) > 200 or parsed.scheme not in ('http', 'https') or not parsed.hostname:
         raise ValueError('Enter a model and valid HTTP API endpoint')
     parts = config.get('parts', [])
-    if not parts or any(part not in ('questions', 'local', 'agent-safety') for part in parts):
+    if not parts or any(part not in ('questions', 'local', 'agent-safety', 'memory-poisoning') for part in parts):
         raise ValueError('Select at least one benchmark part')
+    condition = str(config.get('condition', 'clean')).strip() or 'clean'
+    if condition not in ('clean', 'poisoned', 'safeguarded'):
+        raise ValueError('Unknown memory-poisoning condition')
     actions, seed = int(config.get('actions', 200)), int(config.get('seed', 42))
     if not 1 <= actions <= 200:
         raise ValueError('Action limit must be between 1 and 200')
@@ -133,6 +136,9 @@ def launch(config):
     for part in ('questions', 'local', 'agent-safety'):
         if part not in parts:
             command.append('--skip-' + part)
+    # Memory poisoning is opt-in and carries a condition (a run fixes one condition).
+    if 'memory-poisoning' in parts:
+        command += ['--run-memory-poisoning', '--condition', condition]
     wrapper = config.get('wrapper') or None
     if wrapper:
         if wrapper not in ('pentestgpt', 'cai', 'vulnbot'):
