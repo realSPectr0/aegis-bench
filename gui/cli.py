@@ -153,31 +153,36 @@ class Terminal:
         curses.start_color()
         curses.use_default_colors()
         if curses.COLORS >= 256:
-            curses.init_pair(C_ACCENT,    141,  -1)    # violet accent
-            curses.init_pair(C_TITLE,      255, -1)    # bright white
-            curses.init_pair(C_WARN,       179, -1)    # warm amber
-            curses.init_pair(C_ERROR,      167, -1)    # soft red
-            curses.init_pair(C_DIM,        243, -1)    # medium gray
-            curses.init_pair(C_SELECT,     16, 141)    # dark on violet
-            curses.init_pair(C_SUCCESS,    108, -1)    # sage green
-            curses.init_pair(C_HEADER_BG, 141,  236)   # violet on charcoal
-            curses.init_pair(C_TAB_ACT,    16, 141)    # dark on violet
-            curses.init_pair(C_TAB_INACT,  250, 238)   # light on charcoal
-            curses.init_pair(C_FIELD_LBL,  246, -1)    # light gray
-            curses.init_pair(C_FIELD_VAL,  252, -1)    # near white
-            curses.init_pair(C_LOG_KEY,    117, -1)    # soft blue
-            curses.init_pair(C_BORDER_F,  141,  -1)    # violet borders
-            curses.init_pair(C_STATUS_RUN, 114, -1)    # green
-            curses.init_pair(C_STATUS_OK,  108, -1)    # sage
+            # Catppuccin Mocha-inspired 256-color palette. Keeping one warm,
+            # low-contrast base across the UI is much easier on the eyes than
+            # mixing the terminal's unknown background with saturated accents.
+            base, mantle = 234, 233
+            curses.init_pair(C_ACCENT,     183, base)    # mauve
+            curses.init_pair(C_TITLE,      189, base)    # text
+            curses.init_pair(C_WARN,       223, base)    # yellow
+            curses.init_pair(C_ERROR,      211, base)    # red
+            curses.init_pair(C_DIM,        146, base)    # subtext
+            curses.init_pair(C_SELECT,     base, 111)    # base on blue
+            curses.init_pair(C_SUCCESS,    151, base)    # green
+            curses.init_pair(C_HEADER_BG,  183, mantle)  # mauve on mantle
+            curses.init_pair(C_TAB_ACT,    base, 111)    # base on blue
+            curses.init_pair(C_TAB_INACT,  146, mantle)  # subtext on mantle
+            curses.init_pair(C_FIELD_LBL,  147, base)    # lavender
+            curses.init_pair(C_FIELD_VAL,  189, base)    # text
+            curses.init_pair(C_LOG_KEY,    152, base)    # teal
+            curses.init_pair(C_BORDER_F,   111, base)    # blue
+            curses.init_pair(C_STATUS_RUN, 151, mantle)  # green
+            curses.init_pair(C_STATUS_OK,  151, mantle)  # green
+            self.screen.bkgd(' ', curses.color_pair(C_FIELD_VAL))
         else:
-            curses.init_pair(C_ACCENT,     curses.COLOR_CYAN,    -1)
+            curses.init_pair(C_ACCENT,     curses.COLOR_MAGENTA, -1)
             curses.init_pair(C_TITLE,      curses.COLOR_WHITE,   -1)
             curses.init_pair(C_WARN,       curses.COLOR_YELLOW,  -1)
             curses.init_pair(C_ERROR,      curses.COLOR_RED,     -1)
             curses.init_pair(C_DIM,        curses.COLOR_WHITE,   -1)
             curses.init_pair(C_SELECT,     curses.COLOR_BLACK,   curses.COLOR_CYAN)
             curses.init_pair(C_SUCCESS,    curses.COLOR_GREEN,   -1)
-            curses.init_pair(C_HEADER_BG,  curses.COLOR_CYAN,    curses.COLOR_BLACK)
+            curses.init_pair(C_HEADER_BG,  curses.COLOR_WHITE,   curses.COLOR_BLUE)
             curses.init_pair(C_TAB_ACT,    curses.COLOR_BLACK,   curses.COLOR_CYAN)
             curses.init_pair(C_TAB_INACT,  curses.COLOR_WHITE,   curses.COLOR_BLACK)
             curses.init_pair(C_FIELD_LBL,  curses.COLOR_WHITE,   -1)
@@ -225,7 +230,8 @@ class Terminal:
     def draw_header(self, width):
         """Render the top header bar."""
         self.put(0, 0, ' ' * width, C_HEADER_BG)
-        self.put(0, 1, ' AEGISBENCH  /  SECURITY EVALUATION ', C_HEADER_BG, True)
+        self.put(0, 1, ' AEGISBENCH ', C_HEADER_BG, True)
+        self.put(0, 13, 'RESEARCH CONSOLE  /  LLM SECURITY EVALUATION', C_HEADER_BG)
         status = self.active_status()
         if status == 'RUNNING':
             self.spin_frame = (self.spin_frame + 1) % len(SYM_SPINNER)
@@ -846,28 +852,25 @@ class ControlPanel(Terminal):
         return lines
 
     def draw_home_page(self, h, w):
-        logo = [
-            '   _   ___ ___ ___ ___ ',
-            '  /_\\ | __/ __|_ _/ __|',
-            ' / _ \\| _| (_ || |\\__ \\',
-            '/_/ \\_\\___\\___|___|___/',
-        ]
-        cx = max(2, (w - 76) // 2)
+        cx = max(2, (w - 84) // 2)
         top = 5
-        for i, line in enumerate(logo):
-            self.put(top + i, cx + 1, line, C_ACCENT, True)
-        self.put(top + 4, cx + 1, 'B E N C H', C_TITLE, True)
-        self.put(top + 5, cx + 1, 'LLM Security Benchmark Framework', C_DIM)
+        title = ' AEGISBENCH '
+        rule_w = min(82, w - 2 * cx)
+        self.put(top, cx, '━' * rule_w, C_ACCENT)
+        self.put(top + 1, cx, title, C_TITLE, True)
+        self.put(top + 1, cx + len(title), 'RESEARCH CONSOLE', C_FIELD_LBL, True)
+        self.put(top + 2, cx, 'Independent evaluations  /  auditable evidence  /  local-first execution', C_DIM)
+        self.put(top + 3, cx, '━' * rule_w, C_ACCENT)
 
         # --- Full-width benchmark overview ---
-        card_top = top + 8
-        total_w = min(76, w - cx - 2)
+        card_top = top + 6
+        total_w = min(84, w - cx - 2)
         left_w = max(30, total_w // 2)
         right_w = total_w - left_w - 2
         card_h = 20 if h > 44 else min(h - card_top - 10, 15)
 
         # Left card: System Status
-        self.box(card_top, cx, card_h, left_w, 'System Status')
+        self.box(card_top, cx, card_h, left_w, '01  ENVIRONMENT')
         ollama_ok = len(self.models) > 0
         self.put(card_top + 2, cx + 3, f'{SYM_CHECK if ollama_ok else SYM_CROSS} Ollama',
                  C_SUCCESS if ollama_ok else C_ERROR)
@@ -897,7 +900,7 @@ class ControlPanel(Terminal):
         # Right card: What's in the benchmark
         rx = cx + left_w + 2
         if right_w >= 24:
-            self.box(card_top, rx, card_h, right_w, 'The Benchmark')
+            self.box(card_top, rx, card_h, right_w, '02  TEST CATALOG')
             ry = card_top + 2
             total, parts = benchmark_overview()
             self.put(ry, rx + 3, f'{total} total test cases', C_FIELD_VAL)
@@ -921,21 +924,21 @@ class ControlPanel(Terminal):
         menu_top = card_top + card_h + 1
         if menu_top + 5 < h - 4:
             items = [
-                ('F1', 'New Benchmark',  'Configure and launch a run'),
-                ('F2', 'View Results',   f'{len(self.rows)} saved reports'),
-                ('F3', 'Model Manager',  'Ollama models and VRAM'),
-                ('F4', 'Live Activity',  'Real-time sandbox output'),
+                ('F1', 'CONFIGURE', 'model, suites and defenses'),
+                ('F2', 'RESULTS',   f'{len(self.rows)} saved reports'),
+                ('F3', 'MODELS',    'Ollama inventory and VRAM'),
+                ('F4', 'ACTIVITY',  'live prompts and sandbox events'),
             ]
             for i, (key, label, hint) in enumerate(items):
                 sel = i == self.cursor
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                text = f'{prefix}[{key}]  {label:<18} {hint}'
+                text = f'{prefix}{key:<4} {label:<13} {hint}'
                 row_w = min(60, w - cx - 2)
                 self.selected_row(menu_top + i, cx, text, row_w, sel)
                 self.hits.append((menu_top + i, cx, 1, row_w, 'home', i))
 
         if menu_top + 7 < h - 4:
-            tagline = f'Local-first {SYM_DOT} Reproducible {SYM_DOT} Research-grade'
+            tagline = f'CONTROLLED {SYM_DOT} REPRODUCIBLE {SYM_DOT} AUDITABLE'
             self.put(menu_top + 6, max(2, (w - len(tagline)) // 2), tagline, C_DIM)
 
     def draw_streams(self, output, judge, machine):
@@ -982,9 +985,9 @@ class ControlPanel(Terminal):
                 judge_lines += report_model.review_lines(event['review'])
             elif kind == 'review_error':
                 judge_lines += [f'JUDGE ERROR: {event["text"]}']
-        for rect, content, area, label in ((output, lines, 'output', 'Runner Output'),
-                                           (judge, judge_lines, 'judge', 'Judge Exchange'),
-                                           (machine, self.machine_lines(events), 'machine', 'Machine Activity')):
+        for rect, content, area, label in ((output, lines, 'output', '01  RUNNER OUTPUT'),
+                                           (judge, judge_lines, 'judge', '02  JUDGE EXCHANGE'),
+                                           (machine, self.machine_lines(events), 'machine', '03  SANDBOX ACTIVITY')):
             y, x, h, w = rect
             self.frame(y, x, h, w, label, area)
             self.draw_text(content, y + 2, x + 2, max(1, h - 4), w - 4, area)
@@ -1028,7 +1031,7 @@ class ControlPanel(Terminal):
         else:
             # Setup panel
             left = min(52, max(38, w // 3 + 8))
-            self.frame(4, 1, h - 8, left, 'CONFIGURE RUN  ·  SPACE/ENTER TO TOGGLE', 'setup')
+            self.frame(4, 1, h - 8, left, 'RUN DESIGN', 'setup')
             labels = [
                 ('Model',       self.config['model']),
                 ('Wrapper',     'Off (direct)' if self.stack == 'Ollama' else f'{self.stack} (auto-start)'),
@@ -1041,12 +1044,13 @@ class ControlPanel(Terminal):
                 y = 6 + index
                 sel = self.focus == 'setup' and self.cursor == index
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                text = f'{prefix}{label + ":":<14} {value}'
+                text = f'{prefix}{label.upper():<12}  {value}'
                 self.selected_row(y, 3, text, left - 4, sel)
                 self.hits.append((y, 3, 1, left - 4, 'setup', index))
 
             # Separator
-            self.put(12, 3, f'   {BD_H * max(1, left - 8)}', C_BORDER_F)
+            self.put(12, 3, '   EVALUATION MATRIX', C_ACCENT, True)
+            self.put(12, 24, BD_H * max(1, left - 29), C_DIM)
 
             # Part checkboxes
             part_labels = [PART_LABELS[part] for part in ALL_PARTS]
@@ -1055,10 +1059,11 @@ class ControlPanel(Terminal):
                 sel = self.focus == 'setup' and self.cursor == 6 + i
                 enabled = part in self.config['parts']
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                check = SYM_CHECK if enabled else ' '
+                check = '●' if enabled else '○'
                 # The memory part shows its condition; selecting it cycles off/clean/poisoned/safeguarded.
                 suffix = f' [{self.config["condition"]}]' if part == MEMORY_PART and enabled else ''
-                text = f'{prefix}[{check}] Part {i+1}: {plabel}{suffix}'
+                family = 'CORE' if part in ('questions', 'local') else 'LEGACY' if part == 'agent-safety' else 'EXPERIMENT' if part == MEMORY_PART else 'SECURITY'
+                text = f'{prefix}{check} {family:<10} {plabel}{suffix}'
                 self.selected_row(y, 3, text, left - 4, sel)
                 self.hits.append((y, 3, 1, left - 4, 'setup', 6 + i))
 
@@ -1068,18 +1073,21 @@ class ControlPanel(Terminal):
 
             # Action buttons
             for btn_i, (btn_label, btn_color) in enumerate([
-                (f'{SYM_BLOCK} Start Benchmark', C_SUCCESS),
-                (f'{SYM_CROSS} Stop Benchmark', C_ERROR),
+                (f'{SYM_BLOCK}  RUN SELECTED EVALUATIONS', C_SUCCESS),
+                (f'{SYM_CROSS}  STOP ACTIVE RUN', C_ERROR),
             ]):
                 y = 14 + len(ALL_PARTS) + btn_i
                 idx = action_start + btn_i
                 sel = self.focus == 'setup' and self.cursor == idx
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                self.selected_row(y, 3, f'{prefix}{btn_label}', left - 4, sel)
+                if sel:
+                    self.selected_row(y, 3, f'{prefix}{btn_label}', left - 4, True)
+                else:
+                    self.put(y, 3, f'{prefix}{btn_label}', btn_color, True)
                 self.hits.append((y, 3, 1, left - 4, 'setup', idx))
 
             # Hint
-            self.put(h - 6, 3, 'Enter: select/edit  Tab: switch pane', C_DIM)
+            self.put(h - 6, 3, 'ENTER toggle/edit  ·  TAB change pane', C_DIM)
 
             # Right side: three stream panels
             right_x, right_w = left + 2, w - left - 3
@@ -1481,7 +1489,7 @@ class ControlPanel(Terminal):
                     self.export_pdf(self.detail_group if self.page_detail else self.filtered_groups[self.cursor])
                 elif key == '\t' and self.tab == 0:
                     areas = ['setup', 'output', 'judge', 'machine']
-                    self.focus = areas[(areas.index(self.focus) + 1) % 3]
+                    self.focus = areas[(areas.index(self.focus) + 1) % len(areas)]
                 elif key in (curses.KEY_DOWN, curses.KEY_UP, 'j', 'k', curses.KEY_NPAGE, curses.KEY_PPAGE):
                     down = key in (curses.KEY_DOWN, 'j', curses.KEY_NPAGE)
                     step = 8 if key in (curses.KEY_NPAGE, curses.KEY_PPAGE) else 1
@@ -1493,7 +1501,7 @@ class ControlPanel(Terminal):
                         area = self.focus
                         self.scroll_stream(area, down, step)
                     else:
-                        count = 12 if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
+                        count = (6 + len(ALL_PARTS) + 2) if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
                         self.cursor = max(0, min(max(0, count - 1), self.cursor + (step if down else -step)))
                 elif key == curses.KEY_END and ((self.tab == 0 and self.focus != 'setup') or self.tab == 3):
                     self.follow[self.focus] = True
