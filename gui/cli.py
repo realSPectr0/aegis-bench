@@ -53,6 +53,11 @@ STACKS = {
     'VulnBot': 'vulnbot',
 }
 PARTS = ['questions', 'local', 'agent-safety']
+# Default-enabled set stays PARTS (3). Memory poisoning is a separate opt-in sweep, so it is
+# shown in the setup panel but off by default; selecting it cycles its condition.
+ALL_PARTS = PARTS + ['memory-poisoning']
+MEMORY_PART = 'memory-poisoning'
+CONDITION_CYCLE = [None, 'clean', 'poisoned', 'safeguarded']
 
 # Box-drawing characters
 BD_TL = '\u256d'  # rounded top-left
@@ -1035,27 +1040,29 @@ class ControlPanel(Terminal):
             self.put(12, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
 
             # Part checkboxes
-            part_labels = ['Safety Questions', 'Local Challenges', 'Agent Safety']
-            for i, (part, plabel) in enumerate(zip(PARTS, part_labels)):
+            part_labels = ['Safety Questions', 'Local Challenges', 'Agent Safety', 'Memory Poisoning']
+            for i, (part, plabel) in enumerate(zip(ALL_PARTS, part_labels)):
                 y = 13 + i
                 sel = self.focus == 'setup' and self.cursor == 6 + i
                 enabled = part in self.config['parts']
                 prefix = f' {SYM_ARROW} ' if sel else '   '
                 check = SYM_CHECK if enabled else ' '
-                text = f'{prefix}[{check}] Part {i+1}: {plabel}'
+                # The memory part shows its condition; selecting it cycles off/clean/poisoned/safeguarded.
+                suffix = f' [{self.config["condition"]}]' if part == MEMORY_PART and enabled else ''
+                text = f'{prefix}[{check}] Part {i+1}: {plabel}{suffix}'
                 self.selected_row(y, 3, text, left - 4, sel)
                 self.hits.append((y, 3, 1, left - 4, 'setup', 6 + i))
 
             # Separator
-            self.put(16, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
+            self.put(17, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
 
             # Action buttons
             for btn_i, (btn_label, btn_color) in enumerate([
                 (f'{SYM_BLOCK} Start Benchmark', C_SUCCESS),
                 (f'{SYM_CROSS} Stop Benchmark', C_ERROR),
             ]):
-                y = 17 + btn_i
-                idx = 9 + btn_i
+                y = 18 + btn_i
+                idx = 10 + btn_i
                 sel = self.focus == 'setup' and self.cursor == idx
                 prefix = f' {SYM_ARROW} ' if sel else '   '
                 self.selected_row(y, 3, f'{prefix}{btn_label}', left - 4, sel)
@@ -1387,13 +1394,25 @@ class ControlPanel(Terminal):
             value = self.edit(field, self.config[field])
             if value is not None:
                 self.config[field] = int(value) if field in ('seed', 'actions') else value
-        elif self.cursor < 9:
-            part = PARTS[self.cursor - 6]
-            if part in self.config['parts']:
+        elif self.cursor < 10:
+            part = ALL_PARTS[self.cursor - 6]
+            if part == MEMORY_PART:
+                # Cycle off -> clean -> poisoned -> safeguarded -> off.
+                current = self.config['condition'] if part in self.config['parts'] else None
+                nxt = CONDITION_CYCLE[(CONDITION_CYCLE.index(current) + 1) % len(CONDITION_CYCLE)]
+                if nxt is None:
+                    self.config['parts'].remove(part)
+                    self.set_notice('Memory poisoning: off.')
+                else:
+                    if part not in self.config['parts']:
+                        self.config['parts'].append(part)
+                    self.config['condition'] = nxt
+                    self.set_notice(f'Memory poisoning: {nxt} (run each condition as a separate sweep).')
+            elif part in self.config['parts']:
                 self.config['parts'].remove(part)
             else:
                 self.config['parts'].append(part)
-        elif self.cursor == 9:
+        elif self.cursor == 10:
             server.launch(self.config)
             self.scroll = {'output': 0, 'judge': 0, 'machine': 0}
             self.set_notice(f'{SYM_CHECK} Running. Judge exchanges appear after each response.')
@@ -1464,7 +1483,7 @@ class ControlPanel(Terminal):
                         area = self.focus
                         self.scroll_stream(area, down, step)
                     else:
-                        count = 11 if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
+                        count = 12 if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
                         self.cursor = max(0, min(max(0, count - 1), self.cursor + (step if down else -step)))
                 elif key == curses.KEY_END and ((self.tab == 0 and self.focus != 'setup') or self.tab == 3):
                     self.follow[self.focus] = True
