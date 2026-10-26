@@ -55,6 +55,8 @@ ClankerGantlet/
 |
 |-- tools/                        # Standalone utilities
 |   |-- compare_results.py        #   Compare two result JSON files
+|   |-- visualize_benchmark.py    #   Schema-aware benchmark plots
+|   |-- visualize_model_weights.py#   CPU tensor-distribution plots
 |   +-- recover_events.py         #   Rebuild a partial report from a live event log
 |
 |-- legacy/                       # Archived files from the original CTFd setup
@@ -417,6 +419,34 @@ python gauntlet_runner.py \
 ```bash
 python tools/compare_results.py results/RUN_A.json results/RUN_B.json
 ```
+
+## Visualizations
+
+Install the plotting dependency from `benchmark-requirements.txt`, then plot one or more
+compatible reports. Populations are separated by category and attack type; sample sizes are
+printed on every bar and missing metrics remain missing.
+
+```bash
+python tools/visualize_benchmark.py results/run-a.json results/run-b.json \
+  --output-dir plots/comparison --format png --format pdf
+
+python tools/visualize_benchmark.py results/security.json \
+  --metric attack_success --metric task_correctness --model qwen3.5:9b \
+  --output-dir plots/security
+```
+
+Weight visualization measures actual local tensors and is deliberately separate from benchmark
+performance. Supported inputs are `.npy`, `.npz`, and `.safetensors` (the last requires the
+optional `safetensors` package). Tensors are inspected on CPU and deterministically sampled for
+plots; PyTorch pickle checkpoints and GGUF files are rejected rather than guessed at.
+
+```bash
+python tools/visualize_model_weights.py model.safetensors model-00002-of-00004.safetensors \
+  --sample-size 100000 --output-dir plots/weights --format png --format pdf
+```
+
+Generated plots belong in ignored `plots/` or another output directory and are not research
+evidence by themselves. Tensor distributions do not explain or cause security behavior.
 
 ---
 

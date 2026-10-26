@@ -340,6 +340,9 @@ def summarize_child_report(path: Path) -> dict[str, Any]:
             "kind": data.get("benchmark_part", "local"),
             "category_summaries": data.get("category_summaries", {}),
         }
+    if str(data.get("schema_version", "")).startswith("security-category-"):
+        return {"kind": "security_category", "category": data.get("category"),
+                "security_summary": data.get("summary", {})}
     return {}
 
 
@@ -472,6 +475,12 @@ def main() -> int:
             summary_lines.append(
                 f"  category: {category:<18} solved {values.get('solved')}/{values.get('attempted')} "
                 f"({values.get('solve_rate')}%{extra})"
+            )
+        security = metrics.get("security_summary") or {}
+        for metric, values in (security.get("metrics") or {}).items():
+            summary_lines.append(
+                f"  security: {metric:<29} {values.get('value')} "
+                f"(n={values.get('denominator')})"
             )
         summary_lines.extend(f"  report: {report}" for report in part["reports"])
     summary_lines.append(f"Overall: {'complete' if summary['complete'] else 'incomplete'}")
