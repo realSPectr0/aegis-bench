@@ -38,7 +38,9 @@ def benchmark_overview():
     local = [(label, len(local_challenge_runner.challenge_ids([category]))) for category, label in local_labels]
     agent = [('prompt injection', len(local_challenge_runner.challenge_ids(['agent_safety'])))]
     part1 = [(name.replace('_', ' '), count) for name, count in subparts.items()]
-    parts = [('Part 1: Safety', part1), ('Part 2: Local', local), ('Part 3: Agent', agent)]
+    security = [('RAG security', 3), ('prompt injection', 3), ('prompt obfuscation', 4),
+                ('system-prompt extraction', 1)]
+    parts = [('Part 1: Safety', part1), ('Part 2: Local', local), ('LLM security categories', security)]
     total = sum(count for _, items in parts for _, count in items)
     _OVERVIEW_CACHE.append((total, parts))
     return total, parts
@@ -52,10 +54,17 @@ STACKS = {
     'CAI adapter': 'cai',
     'VulnBot': 'vulnbot',
 }
-PARTS = ['questions', 'local', 'agent-safety']
-# Default-enabled set stays PARTS (3). Memory poisoning is a separate opt-in sweep, so it is
-# shown in the setup panel but off by default; selecting it cycles its condition.
+SECURITY_PARTS = ['rag-security', 'prompt-injection', 'prompt-obfuscation', 'system-prompt-extraction']
+# The primary TUI selection contains the core benchmark plus independent security categories.
+# Memory poisoning remains a separate opt-in experiment.
+PARTS = ['questions', 'local', 'agent-safety'] + SECURITY_PARTS
 ALL_PARTS = PARTS + ['memory-poisoning']
+PART_LABELS = {
+    'questions': 'Safety Questions', 'local': 'Local Challenges', 'agent-safety': 'Legacy Agent Safety',
+    'rag-security': 'RAG Security', 'prompt-injection': 'Prompt Injection',
+    'prompt-obfuscation': 'Prompt Obfuscation', 'system-prompt-extraction': 'System-Prompt Extraction',
+    'memory-poisoning': 'Memory Poisoning',
+}
 MEMORY_PART = 'memory-poisoning'
 CONDITION_CYCLE = [None, 'clean', 'poisoned', 'safeguarded']
 
@@ -1040,7 +1049,7 @@ class ControlPanel(Terminal):
             self.put(12, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
 
             # Part checkboxes
-            part_labels = ['Safety Questions', 'Local Challenges', 'Agent Safety', 'Memory Poisoning']
+            part_labels = [PART_LABELS[part] for part in ALL_PARTS]
             for i, (part, plabel) in enumerate(zip(ALL_PARTS, part_labels)):
                 y = 13 + i
                 sel = self.focus == 'setup' and self.cursor == 6 + i
@@ -1054,15 +1063,16 @@ class ControlPanel(Terminal):
                 self.hits.append((y, 3, 1, left - 4, 'setup', 6 + i))
 
             # Separator
-            self.put(17, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
+            action_start = 6 + len(ALL_PARTS)
+            self.put(13 + len(ALL_PARTS), 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
 
             # Action buttons
             for btn_i, (btn_label, btn_color) in enumerate([
                 (f'{SYM_BLOCK} Start Benchmark', C_SUCCESS),
                 (f'{SYM_CROSS} Stop Benchmark', C_ERROR),
             ]):
-                y = 18 + btn_i
-                idx = 10 + btn_i
+                y = 14 + len(ALL_PARTS) + btn_i
+                idx = action_start + btn_i
                 sel = self.focus == 'setup' and self.cursor == idx
                 prefix = f' {SYM_ARROW} ' if sel else '   '
                 self.selected_row(y, 3, f'{prefix}{btn_label}', left - 4, sel)
@@ -1394,7 +1404,7 @@ class ControlPanel(Terminal):
             value = self.edit(field, self.config[field])
             if value is not None:
                 self.config[field] = int(value) if field in ('seed', 'actions') else value
-        elif self.cursor < 10:
+        elif self.cursor < 6 + len(ALL_PARTS):
             part = ALL_PARTS[self.cursor - 6]
             if part == MEMORY_PART:
                 # Cycle off -> clean -> poisoned -> safeguarded -> off.
@@ -1412,7 +1422,7 @@ class ControlPanel(Terminal):
                 self.config['parts'].remove(part)
             else:
                 self.config['parts'].append(part)
-        elif self.cursor == 10:
+        elif self.cursor == 6 + len(ALL_PARTS):
             server.launch(self.config)
             self.scroll = {'output': 0, 'judge': 0, 'machine': 0}
             self.set_notice(f'{SYM_CHECK} Running. Judge exchanges appear after each response.')
@@ -1551,6 +1561,7 @@ def headless_run(args):
         parts.append('agent-safety')
     if getattr(args, 'memory_poisoning', False):
         parts.append('memory-poisoning')
+    parts.extend((getattr(args, 'security_category', None) or []))
     if not parts:
         print('error: all parts skipped, nothing to run', file=sys.stderr)
         return 1
@@ -1638,6 +1649,7 @@ def main():
     parser.add_argument('--skip-questions', action='store_true')
     parser.add_argument('--skip-local', action='store_true')
     parser.add_argument('--skip-agent-safety', action='store_true')
+    parser.add_argument('--security-category', action='append', choices=('rag_security','prompt_injection','prompt_obfuscation','system_prompt_extraction'))
     parser.add_argument('--memory-poisoning', action='store_true',
                         help='Add Part 4: cross-session memory-poisoning challenges, run under --condition')
     parser.add_argument('--condition', choices=('clean', 'poisoned', 'safeguarded'), default='clean',

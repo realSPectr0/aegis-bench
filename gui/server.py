@@ -104,7 +104,9 @@ def launch(config):
     if not model or len(model) > 200 or parsed.scheme not in ('http', 'https') or not parsed.hostname:
         raise ValueError('Enter a model and valid HTTP API endpoint')
     parts = config.get('parts', [])
-    if not parts or any(part not in ('questions', 'local', 'agent-safety', 'memory-poisoning') for part in parts):
+    valid_security = {'rag-security', 'prompt-injection', 'prompt-obfuscation', 'system-prompt-extraction',
+                      'rag_security', 'prompt_injection', 'prompt_obfuscation', 'system_prompt_extraction'}
+    if not parts or any(part not in ('questions', 'local', 'agent-safety', 'memory-poisoning') and part not in valid_security for part in parts):
         raise ValueError('Select at least one benchmark part')
     condition = str(config.get('condition', 'clean')).strip() or 'clean'
     if condition not in ('clean', 'poisoned', 'safeguarded'):
@@ -139,6 +141,14 @@ def launch(config):
     # Memory poisoning is opt-in and carries a condition (a run fixes one condition).
     if 'memory-poisoning' in parts:
         command += ['--run-memory-poisoning', '--condition', condition]
+    security_map = {'rag-security': 'rag_security', 'prompt-injection': 'prompt_injection',
+                    'prompt-obfuscation': 'prompt_obfuscation', 'system-prompt-extraction': 'system_prompt_extraction'}
+    for part, category in security_map.items():
+        if part in parts:
+            command += ['--security-category', category]
+    for category in ('rag_security', 'prompt_injection', 'prompt_obfuscation', 'system_prompt_extraction'):
+        if category in parts:
+            command += ['--security-category', category]
     wrapper = config.get('wrapper') or None
     if wrapper:
         if wrapper not in ('pentestgpt', 'cai', 'vulnbot'):

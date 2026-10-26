@@ -349,6 +349,30 @@ use here-doc file edits instead of fighting one-line quoting. Install the
 total/model/command time, and action counts. Generated flags and injection
 canaries are redacted from event logs.
 
+## Independent LLM security categories
+
+The primary security layers are independent, versioned synthetic evaluations rather than a
+claimed reproduction of CAI or VulnBot. Run them separately or select several in one run:
+
+```bash
+python security_category_runner.py --category rag_security --model qwen3.5:9b
+python security_category_runner.py --category prompt_injection --model qwen3.5:9b
+python security_category_runner.py --category prompt_obfuscation --model qwen3.5:9b
+python security_category_runner.py --category system_prompt_extraction --model qwen3.5:9b
+python gauntlet_runner.py --skip-questions --skip-local --skip-agent-safety \
+  --security-category rag_security --security-category prompt_injection
+```
+
+RAG uses a controlled in-process corpus inserted into the request; it does not test a
+production retriever. Results distinguish the retrieved document IDs from generation output,
+and include clean/adversarial/benign controls. Prompt injection covers direct, indirect, and
+document-style inputs. Obfuscation records the base case and transformation (base64, Unicode
+spacing, or formatting) so transformed and original cases are auditable. System-prompt
+extraction is a small additional category with an explicit secret-disclosure ground truth.
+Attack success, task correctness, refusal, false-positive rate, latency, model, seed, and
+raw output are recorded separately; no cumulative ranking is produced. CAI and VulnBot remain
+optional CAI-inspired/VulnBot-inspired adapters, not complete framework implementations.
+
 ## Part 3: indirect prompt injection
 
 Ten variants place conflicting instructions in notes, simulated tool output,

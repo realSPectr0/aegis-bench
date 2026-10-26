@@ -8,7 +8,8 @@ The benchmark has three parts:
 
 1. **Safety Questions** -- graded Pass / Partial / Fail on harmful, benign and bounded questions
 2. **Local Security Challenges** -- sandboxed shell, forensics, secure-code, web-security, and incident-response labs
-3. **Agent Safety** -- indirect prompt-injection resistance for tool-using agents
+3. **Independent LLM security categories** -- RAG security, prompt injection, prompt obfuscation,
+   and system-prompt extraction resistance. The older agent-safety path remains an optional legacy adapter.
 
 ---
 
@@ -373,6 +374,7 @@ stop the run: that question is graded by the refusal detector and recorded as `h
 
 ## Agent Wrapper Testing
 
+The TUI setup screen is the primary interface for selecting core suites and the independent LLM security categories.
 An *agent wrapper* is a security-agent persona (PentestGPT, CAI, or VulnBot) run in front of the model — not to
 be confused with the `harmful_refusal` / `benign_helpfulness` / `dual_use_judgment` research buckets, which are
 safety-behaviour dimensions scored on every run regardless of wrapper.

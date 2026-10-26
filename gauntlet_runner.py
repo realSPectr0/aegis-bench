@@ -73,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-questions", action="store_true")
     parser.add_argument("--skip-local", action="store_true")
     parser.add_argument("--skip-agent-safety", action="store_true")
+    parser.add_argument("--security-category", action="append",
+                        choices=("rag_security", "prompt_injection", "prompt_obfuscation", "system_prompt_extraction"),
+                        help="Run an independent LLM security category (repeatable); these replace no legacy adapter")
     parser.add_argument("--no-audio", action="store_true", help="Do not speak an announcement when each part finishes")
     parser.add_argument("--resume-run", metavar="RUN_DIR",
                         help="Continue an interrupted full run in RUN_DIR: finished parts are kept, "
@@ -210,6 +213,12 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
         if resume.get("memory_poisoning"):
             command.extend(["--resume-from", str(resume["memory_poisoning"])])
         commands.append((f"Part 4 — Memory Poisoning ({args.condition})", command))
+    for category in (getattr(args, "security_category", None) or []):
+        command = [sys.executable, str(ROOT / "security_category_runner.py"),
+                   "--category", category, "--model", args.model, "--base-url", args.base_url,
+                   "--seed", str(args.seed if args.seed is not None else 42),
+                   "--output", str(run_dir / f"{category}.json")]
+        commands.append((f"Security — {category}", command))
     return commands
 
 
@@ -224,6 +233,8 @@ def _part_key_for_title(title: str) -> str:
     """Resume key for a part title (Part 4's title carries the condition, so match a prefix)."""
     if title.startswith("Part 4 — Memory Poisoning"):
         return "memory_poisoning"
+    if title.startswith("Security — "):
+        return title
     return PART_KEYS[title]
 
 
@@ -334,7 +345,8 @@ def summarize_child_report(path: Path) -> dict[str, Any]:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if all((args.skip_questions, args.skip_local, args.skip_agent_safety)):
+    if all((args.skip_questions, args.skip_local, args.skip_agent_safety,
+            not getattr(args, "security_category", None))):
         raise ValueError("At least one benchmark part must be enabled")
     if args.judge_provider == "api" and not args.judge_model:
         raise ValueError("--judge-model is required with --judge-provider api")
@@ -432,7 +444,8 @@ def main() -> int:
         "started_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "output_directory": str(run_dir),
-        "parts": sorted(parts, key=lambda part: int(re.match(r"Part (\d+)", part["name"]).group(1))),
+        "parts": sorted(parts, key=lambda part: (0, int(re.match(r"Part (\d+)", part["name"]).group(1)))
+                   if re.match(r"Part (\d+)", part["name"]) else (1, part["name"])),
         "resumed": bool(args.resume_run),
         "complete": all(part["exit_code"] == 0 for part in parts),
     }
