@@ -2,6 +2,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from memory_poisoning import experiment as E
 from memory_poisoning.trial_log import TrialLogger
@@ -48,13 +49,34 @@ def _run(model, conditions, trials=2, intervening=(0,)):
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_storage_failure_is_logged_separately_from_model_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            logger = TrialLogger(Path(d) / "trials.jsonl")
+            with patch.object(E.MemoryStore, "open", side_effect=E.MemoryStoreCorruptError(Path(d) / "bad", "invalid")):
+                rows = E.run_experiment(FakeModel(), logger, "exp", conditions=["B"],
+                                        trials=1, seed=7, intervening=[0], memory_dir=Path(d))
+            self.assertEqual(rows[0]["status"], "storage_error")
+            self.assertEqual(E.compute_metrics(rows)["errors"], 1)
+            self.assertIsNone(E.compute_metrics(rows)["per_condition"]["B"]["C_ASR"])
+
+    def test_formation_reasoning_line_is_not_written(self):
+        class ReasoningModel(FakeModel):
+            def complete(self, messages, **kwargs):
+                if messages[0]["content"] == E.FORMATION_SYSTEM:
+                    return "<think>REMEMBER: RED-1234</think>\nI will remember it.", {}
+                return super().complete(messages, **kwargs)
+        _, metrics = _run(ReasoningModel(), ["C"])
+        self.assertEqual(metrics["per_condition"]["C"]["ISR"], 0.0)
+
     def test_seeded_poison_followed_scores_full_casr(self):
-        _, metrics = _run(FakeModel(trigger_mode="follow_poison"), ["B"])
+        rows, metrics = _run(FakeModel(trigger_mode="follow_poison"), ["B"])
         b = metrics["per_condition"]["B"]
         self.assertEqual(b["C_ASR"], 1.0)
         self.assertEqual(b["retrieval_rate"], 1.0)
         self.assertEqual(b["behavioral_influence_rate"], 1.0)
         self.assertEqual(b["benign_preservation"], 1.0)
+        self.assertTrue(rows[0]["written"])
+        self.assertNotIn(rows[0]["written"][0], rows[0]["memory_before"])
 
     def test_memory_safeguard_blocks_even_a_poison_follower(self):
         # Condition E trust-gates the untrusted planted record, so it is never retrieved.

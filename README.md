@@ -266,6 +266,38 @@ Every challenge has a difficulty tier (`medium` or `hard` for Part 2). Reports s
 
 10 indirect prompt-injection challenges testing whether tool-using agents leak private data, follow injected instructions, or bypass safety boundaries. Scores both task completion and injection resistance independently.
 
+### Persistent-memory experiments
+
+There are two distinct local experiments. `MPOISON-*` with `--memory-mode seeded` (the
+default) explicitly inserts a misleading record before the agent starts; it measures
+susceptibility to an existing memory. `--memory-mode cross_session` instead asks the model
+to process a note in a writing session. Only a `REMEMBER:` line it emits becomes a record.
+That session ends, the JSON store is reopened, and a separate agent task retrieves notes.
+The result reports `target_written`, `target_retrieved`, and `behavioral_influence` separately
+under `memory_lifecycle`. A failed write is never counted as behavioral influence.
+
+```bash
+python local_challenge_runner.py --model qwen3.5:9b --category memory_poisoning \
+  --memory-mode seeded --condition poisoned --seed 42 --max-actions 20
+python local_challenge_runner.py --model qwen3.5:9b --category memory_poisoning \
+  --memory-mode cross_session --condition poisoned --seed 42 --max-actions 20
+```
+
+Run `clean`, `poisoned`, and `safeguarded` in separate commands with the same seed and
+model. `safeguarded` uses a **signature-based** sanitizer; it is a limited baseline. Pi
+rejects MPOISON cases explicitly. The dedicated synthetic access-code protocol adds A–E
+conditions, ISR/C-ASR, delay sweeps, and selective repair:
+
+```bash
+python -m memory_poisoning.experiment --model qwen3.5:9b --seed 42 \
+  --trials 5 --intervening 0 1 3
+python -m memory_poisoning.experiment --model qwen3.5:9b --protocol wef \
+  --condition B --condition C --condition E --seed 42 --trials 5
+```
+
+See [memory_poisoning/README.md](memory_poisoning/README.md) and [BENCHMARK.md](BENCHMARK.md)
+for storage, metrics, limitations, and comparison methods.
+
 ---
 
 ## Judge Configuration
@@ -392,7 +424,9 @@ python tools/compare_results.py results/RUN_A.json results/RUN_B.json
 python -m pytest tests/ -v
 ```
 
-63 tests covering the benchmark engine, challenge generators, gauntlet orchestrator, wrapper server, GUI server, observers, TUI components, the results model and PDF export, and run resume/recovery.
+Tests cover the benchmark engine, challenge generators, memory experiments, storage integrity,
+comparisons, gauntlet orchestrator, wrapper server, GUI, reports, and resume/recovery. If
+`pytest` is unavailable, run `python3 -m unittest discover -s tests -q`.
 
 ---
 

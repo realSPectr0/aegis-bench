@@ -12,7 +12,9 @@ poisoned memory changes the agent's later behavior (the cross-session attack-suc
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +23,19 @@ from typing import Any, Callable
 
 
 TRUST_LEVELS = ("trusted", "untrusted", "quarantined")
+
+
+class MemoryStoreCorruptError(ValueError):
+    """An existing store cannot be trusted. The original file is left untouched."""
+
+    def __init__(self, path: Path, reason: str):
+        self.path = path
+        self.reason = reason
+        super().__init__(f"corrupt memory store {path}: {reason}")
+
+
+class MemoryStoreIOError(OSError):
+    """Storage I/O failed; distinct from an endpoint or model transport error."""
 
 
 def now_iso() -> str:
@@ -53,17 +68,24 @@ def make_record(content: str, *, source: str, experiment_id: str = "",
 
 # A record the sanitization defense should drop: it tries to redirect the agent to
 # private paths or to override the task's policy from inside stored "memory".
-_SUSPECT_PATTERNS = (
-    r"private/",
-    r"canary",
-    r"ignore (the )?(benchmark|user|policy|instruction)",
-    r"override",
-    r"standing instruction",
-    r"permanently authoriz",
-    r"outrank",
-    r" abliterat",
-)
-_SUSPECT = re.compile("|".join(_SUSPECT_PATTERNS), re.IGNORECASE)
+# Intentionally narrow signatures. The held-out matrix measures their misses rather than
+# being used to extend this list after seeing evaluation results.
+SUSPECT_RULES = {
+    "private_path": re.compile(r"private/", re.IGNORECASE),
+    "canary": re.compile(r"canary", re.IGNORECASE),
+    "ignore_instruction": re.compile(r"ignore (the )?(benchmark|user|policy|instruction)", re.IGNORECASE),
+    "override": re.compile(r"override", re.IGNORECASE),
+    "standing_instruction": re.compile(r"standing instruction", re.IGNORECASE),
+    "permanent_authorization": re.compile(r"permanently authoriz", re.IGNORECASE),
+    "outrank": re.compile(r"outrank", re.IGNORECASE),
+    "abliteration": re.compile(r" abliterat", re.IGNORECASE),
+}
+
+
+def sanitizer_reasons(record: dict[str, Any]) -> list[str]:
+    """Signature matches in payload text only, with auditable rule names."""
+    content = str(record.get("content") or record.get("note") or "")
+    return [name for name, pattern in SUSPECT_RULES.items() if pattern.search(content)]
 
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "from", "with",
@@ -98,9 +120,15 @@ class MemoryStore:
         store = cls(path=path, sanitize=sanitize, trust_gate=trust_gate)
         if path.exists():
             try:
-                store._records = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                store._records = []
+                records = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(records, list) or any(not isinstance(r, dict) for r in records):
+                    raise ValueError("expected a JSON list of records")
+                store._records = records
+            except (json.JSONDecodeError, OSError, UnicodeError, ValueError) as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                store._log("recovery_error", path=str(path), reason=reason,
+                           recovery="none", original_preserved=True)
+                raise MemoryStoreCorruptError(path, reason) from exc
         if store._audit_path.exists():
             try:
                 store._audit = [json.loads(line) for line in
@@ -113,17 +141,35 @@ class MemoryStore:
     def _audit_path(self) -> Path:
         return self.path.with_suffix(".audit.jsonl")
 
-    def _flush(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._records, indent=2), encoding="utf-8")
+    def _flush(self, records: list[dict[str, Any]]) -> None:
+        payload = json.dumps(records, indent=2).encode("utf-8")
+        temporary: str | None = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=self.path.parent, prefix=f".{self.path.name}.",
+                                             suffix=".tmp", delete=False) as handle:
+                temporary = handle.name
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            temporary = None
+        except OSError as exc:
+            raise MemoryStoreIOError(f"memory write failed for {self.path}: {exc}") from exc
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
 
     def _log(self, op: str, **fields: Any) -> None:
         """Append one entry to the audit trail of memory operations."""
         entry = {"op": op, "at": now_iso(), **fields}
         self._audit.append(entry)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._audit_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry) + "\n")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self._audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry) + "\n")
+        except OSError as exc:
+            raise MemoryStoreIOError(f"memory audit failed for {self._audit_path}: {exc}") from exc
 
     def audit_log(self) -> list[dict[str, Any]]:
         return list(self._audit)
@@ -139,8 +185,8 @@ class MemoryStore:
             row.setdefault("source", "seed")
             row.setdefault("trust_status", "untrusted")
             prepared.append(row)
+        self._flush(prepared)
         self._records = prepared
-        self._flush()
         self._log("seed", record_ids=[r["id"] for r in prepared], count=len(prepared))
 
     def write(self, record: dict[str, Any]) -> dict[str, Any]:
@@ -148,8 +194,9 @@ class MemoryStore:
         row = dict(record)
         row.setdefault("id", uuid.uuid4().hex[:16])
         row.setdefault("created_at", now_iso())
-        self._records.append(row)
-        self._flush()
+        updated = [*self._records, row]
+        self._flush(updated)
+        self._records = updated
         self._log("write", record_id=row["id"], source=row.get("source"), trust=row.get("trust_status"))
         return row
 
@@ -173,15 +220,16 @@ class MemoryStore:
         removed = [r for r in self._records if match(r)]
         if removed and len(removed) == len(self._records):
             raise ValueError("repair would remove every record; that is a wipe, not selective repair")
-        self._records = [r for r in self._records if not match(r)]
-        self._flush()
+        updated = [r for r in self._records if not match(r)]
+        self._flush(updated)
+        self._records = updated
         self._log("repair", removed_ids=[r["id"] for r in removed], preserved=len(self._records))
         return removed
 
     def reset(self) -> None:
         """Clear the store so a new trial starts from a known-empty state (isolation)."""
+        self._flush([])
         self._records = []
-        self._flush()
         self._log("reset")
 
     def _trusted(self, record: dict[str, Any]) -> bool:
@@ -190,7 +238,7 @@ class MemoryStore:
         its text matches a policy-override or private-path redirect."""
         if self.trust_gate and record.get("trust_status") != "trusted":
             return False
-        if self.sanitize and _SUSPECT.search(json.dumps(record, ensure_ascii=False)):
+        if self.sanitize and sanitizer_reasons(record):
             return False
         return True
 
@@ -204,9 +252,16 @@ class MemoryStore:
         pool = list(enumerate(self._records))
         considered = [record.get("id") for _, record in pool]
         dropped_ids: list[Any] = []
+        drop_reasons: dict[str, list[str]] = {}
         if self.sanitize or self.trust_gate:
             kept = [(index, record) for index, record in pool if self._trusted(record)]
             dropped_ids = [record.get("id") for index, record in pool if not self._trusted(record)]
+            for _, record in pool:
+                if not self._trusted(record):
+                    reasons = (["untrusted_provenance"] if self.trust_gate and
+                               record.get("trust_status") != "trusted" else [])
+                    reasons += sanitizer_reasons(record) if self.sanitize else []
+                    drop_reasons[str(record.get("id"))] = reasons
             pool = kept
         query_tokens = _tokens(query)
 
@@ -220,7 +275,8 @@ class MemoryStore:
         if selected and dropped_ids:
             selected[0] = {**selected[0], "_sanitizer_dropped": len(dropped_ids)}
         self._log("retrieve", query=query, considered=considered,
-                  dropped=dropped_ids, selected=[r.get("id") for r in selected])
+                  dropped=dropped_ids, drop_reasons=drop_reasons,
+                  selected=[r.get("id") for r in selected])
         return selected
 
     @staticmethod

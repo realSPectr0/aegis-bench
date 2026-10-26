@@ -19,7 +19,7 @@ from typing import Any
 
 # Trial outcome status. "ok" trials are eligible for the behavioral metrics; the error
 # statuses are counted and reported separately rather than folded into success rates.
-STATUSES = ("ok", "model_error", "timeout", "invalid_output", "skipped")
+STATUSES = ("ok", "model_error", "storage_error", "timeout", "invalid_output", "skipped")
 
 
 def _now() -> str:

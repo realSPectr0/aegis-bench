@@ -21,9 +21,11 @@ def install():
         safe = json.loads(runner.redact_text(json.dumps(fields), state['sensitive']))
         emit(kind, state['id'], **safe)
 
-    def generate(challenge_id, workspace, seed, condition="clean", memory_dir=None):
+    def generate(challenge_id, workspace, seed, condition="clean", memory_dir=None,
+                 memory_mode="seeded"):
         challenge = original_generate(challenge_id, workspace, seed,
-                                      condition=condition, memory_dir=memory_dir)
+                                      condition=condition, memory_dir=memory_dir,
+                                      memory_mode=memory_mode)
         state['id'] = challenge_id
         state['sensitive'] = [challenge.expected or '', *challenge.injection_markers]
         event('machine_start', category=challenge.category, goal=challenge.goal,
@@ -67,6 +69,14 @@ def install():
             # to carry it or a thinking model is silently given the smaller budget.
             thinking = getattr(model, 'thinking', False)
             num_ctx = getattr(model, 'num_ctx', None)
+
+            @property
+            def response_format(self):
+                return getattr(model, 'response_format', None)
+
+            @response_format.setter
+            def response_format(self, value):
+                model.response_format = value
 
             def complete(self, messages, **kwargs):
                 if kwargs.get('thinking') is False:

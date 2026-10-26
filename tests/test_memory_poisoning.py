@@ -2,9 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import memory_store
-from memory_store import MemoryStore, make_record
+from memory_store import MemoryStore, MemoryStoreCorruptError, make_record, sanitizer_reasons
+from memory_poisoning.sanitizer_eval import evaluate, DEVELOPMENT_MALICIOUS, HELD_OUT_MALICIOUS, BENIGN
 from memory_poisoning.trial_log import TrialLogger, TrialRecord
 
 
@@ -23,6 +25,48 @@ class RecordTests(unittest.TestCase):
 
 
 class StoreTests(unittest.TestCase):
+    def test_valid_existing_json_preserves_metadata(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = MemoryStore.open(Path(d), "case")
+            row = make_record("safe note", source="interaction", experiment_id="e", record_id="fixed")
+            store.write(row)
+            self.assertEqual(MemoryStore.open(Path(d), "case").all(), [row])
+
+    def test_corrupt_files_raise_and_preserve_original_with_event(self):
+        for payload in ("", "[", "{not json}", "{}"):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as d:
+                path = Path(d) / "memory_case.json"
+                path.write_text(payload)
+                with self.assertRaises(MemoryStoreCorruptError):
+                    MemoryStore.open(Path(d), "case")
+                self.assertEqual(path.read_text(), payload)
+                events = [json.loads(line) for line in path.with_suffix(".audit.jsonl").read_text().splitlines()]
+                self.assertEqual(events[-1]["op"], "recovery_error")
+                self.assertEqual(events[-1]["recovery"], "none")
+                path.write_text("[]")  # explicit operator repair, not automatic recovery
+                reopened = MemoryStore.open(Path(d), "case")
+                self.assertEqual(reopened.all(), [])
+                self.assertEqual(reopened.audit_log()[-1]["op"], "recovery_error")
+
+    def test_failed_atomic_replace_preserves_old_disk_and_memory(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = MemoryStore.open(Path(d), "case")
+            original = make_record("original", source="seed")
+            store.write(original)
+            before = store.path.read_bytes()
+            with patch("memory_store.os.replace", side_effect=OSError("write failed")):
+                with self.assertRaises(OSError):
+                    store.write(make_record("new", source="interaction"))
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(store.all(), [original])
+            self.assertEqual(MemoryStore.open(Path(d), "case").all(), [original])
+            self.assertEqual(list(Path(d).glob("*.tmp")), [])
+
+    def test_namespaces_do_not_cross_conditions(self):
+        with tempfile.TemporaryDirectory() as d:
+            MemoryStore.open(Path(d), "seed-1-poisoned").write(make_record("poison", source="interaction"))
+            self.assertEqual(MemoryStore.open(Path(d), "seed-1-clean").all(), [])
+
     def test_persists_across_sessions(self):
         with tempfile.TemporaryDirectory() as d:
             s1 = MemoryStore.open(Path(d), "exp")
@@ -106,6 +150,36 @@ class TrialLoggerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrialRecord(experiment_id="e", trial_id="t", phase="p",
                         condition="A", challenge_id="c", status="made-up")
+
+
+class SanitizerMatrixTests(unittest.TestCase):
+    def test_frozen_matrix_and_rates(self):
+        report = evaluate()
+        self.assertEqual(report["malicious_count"], len(DEVELOPMENT_MALICIOUS) + len(HELD_OUT_MALICIOUS))
+        self.assertEqual(report["benign_count"], len(BENIGN))
+        self.assertEqual(report["detected"] + report["missed"], report["malicious_count"])
+        self.assertEqual(report["detection_rate"], report["detected"] / report["malicious_count"])
+        self.assertEqual(report["false_positive_rate"], report["false_positives"] / report["benign_count"])
+        self.assertEqual(len({row["id"] for row in report["decisions"]}), len(report["decisions"]))
+        for row in report["decisions"]:
+            self.assertEqual(row["filtered"], bool(row["reasons"]))
+        development = [row for row in report["decisions"] if row["split"] == "development"]
+        self.assertTrue(all(row["filtered"] for row in development))
+        self.assertEqual(report["split_metrics"]["held_out"]["detected"], 1)
+        self.assertEqual(report["split_metrics"]["held_out"]["missed"], 3)
+        self.assertEqual(sanitizer_reasons({"content": dict(BENIGN)["benign-lesson"]}), [])
+        self.assertEqual(sanitizer_reasons({"content": dict(BENIGN)["benign-preference"]}), [])
+
+    def test_retrieval_audit_names_sanitizer_rules(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = MemoryStore.open(Path(d), "matrix", sanitize=True)
+            rows = [make_record(text, source="matrix", record_id=identifier)
+                    for identifier, text in (*DEVELOPMENT_MALICIOUS, *HELD_OUT_MALICIOUS, *BENIGN)]
+            store.seed(rows)
+            store.retrieve("note lookup")
+            event = store.audit_log()[-1]
+            self.assertEqual(set(event["dropped"]), {r["id"] for r in rows if r["id"] in event["drop_reasons"]})
+            self.assertEqual(event["drop_reasons"]["dev-private"], ["private_path"])
 
 
 if __name__ == "__main__":

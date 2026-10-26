@@ -24,6 +24,7 @@ import json
 import math
 import statistics
 import sys
+import random
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,111 @@ def summarize_group(paths: list[Path]) -> dict[str, dict[str, float | int | None
     return out
 
 
+PAIRED_METRICS = {"solved": "solved", "attack_success": "criterion_met",
+                  "injection_followed": "injection_followed", "latency": "latency_seconds",
+                  "total_seconds": "total_seconds"}
+BINARY_METRICS = {"solved", "attack_success", "injection_followed"}
+
+
+def load_units(paths: list[Path], metric: str) -> tuple[dict[tuple[Any, ...], float], dict[str, int]]:
+    """Load auditable trial units from local JSON reports or experiment JSONL files."""
+    units: dict[tuple[Any, ...], float] = {}
+    seen: set[tuple[Any, ...]] = set()
+    counts = {"missing_identifier": 0, "failed": 0, "missing_metric": 0}
+    field = PAIRED_METRICS[metric]
+    for path in paths:
+        if path.suffix == ".jsonl":
+            records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                       if line.strip()]
+            report_seed = None
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            records = data.get("results", [])
+            report_seed = data.get("seed")
+        for row in records:
+            seed = row.get("extra", {}).get("seed", report_seed)
+            challenge = row.get("challenge_id") or row.get("id")
+            phase = row.get("phase", "local")
+            intervening = row.get("intervening", 0)
+            if seed is None or challenge is None:
+                counts["missing_identifier"] += 1
+                continue
+            key = (seed, challenge, phase, intervening)
+            if key in seen:
+                raise ValueError(f"duplicate experimental unit {key!r} in {path}")
+            seen.add(key)
+            if row.get("status") not in ("ok", "solved", "gave_up", "max_actions", "stuck", "no_action"):
+                counts["failed"] += 1
+                continue
+            value = row.get(field)
+            if value is None:
+                counts["missing_metric"] += 1
+                continue
+            units[key] = float(bool(value)) if metric in BINARY_METRICS else float(value)
+    return units, counts
+
+
+def paired_compare(baseline_paths: list[Path], treatment_paths: list[Path],
+                   metric: str, baseline_name: str, treatment_name: str) -> dict[str, Any]:
+    """Mean treatment-minus-baseline difference with paired-unit bootstrap CI.
+
+    Trials pair by (seed, challenge, phase, intervening). Bootstrap resampling
+    clusters by seed, keeping all challenge pairs from a seed together. Binary
+    effects are paired risk differences in percentage points; continuous effects
+    are differences in the original unit. Below five seeds or 30 pairs no CI is claimed.
+    """
+    if metric not in PAIRED_METRICS:
+        raise ValueError(f"unknown paired metric {metric!r}")
+    designs = []
+    for paths in (baseline_paths, treatment_paths):
+        for path in paths:
+            if path.suffix == ".jsonl":
+                continue
+            report = json.loads(path.read_text(encoding="utf-8"))
+            designs.append({key: report[key] for key in ("suite_version", "harness", "memory_mode")
+                            if key in report})
+    for field in ("suite_version", "harness", "memory_mode"):
+        values = {design[field] for design in designs if field in design}
+        if len(values) > 1:
+            raise ValueError(f"cannot pair reports with different {field}: {sorted(values)!r}")
+    base, base_excluded = load_units(baseline_paths, metric)
+    treat, treat_excluded = load_units(treatment_paths, metric)
+    matched = sorted(base.keys() & treat.keys())
+    differences = [treat[key] - base[key] for key in matched]
+    seed_groups: dict[Any, list[float]] = {}
+    for key, difference in zip(matched, differences):
+        seed_groups.setdefault(key[0], []).append(difference)
+    seeds = sorted(seed_groups)
+    scale = 100.0 if metric in BINARY_METRICS else 1.0
+    ci = None
+    if len(matched) >= 30 and len(seeds) >= 5:
+        rng = random.Random(20261026)
+        estimates = []
+        for _ in range(5000):
+            draw = rng.choices(seeds, k=len(seeds))
+            sampled = [difference for seed in draw for difference in seed_groups[seed]]
+            estimates.append(scale * statistics.mean(sampled))
+        estimates.sort()
+        ci = [round(estimates[124], 4), round(estimates[4874], 4)]
+    return {
+        "baseline": baseline_name, "treatment": treatment_name, "metric": metric,
+        "n_matched": len(matched),
+        "n_matched_seeds": len(seeds),
+        "n_unmatched_baseline": len(base.keys() - treat.keys()),
+        "n_unmatched_treatment": len(treat.keys() - base.keys()),
+        "excluded_baseline": base_excluded, "excluded_treatment": treat_excluded,
+        "baseline_estimate": round(scale * statistics.mean(base[key] for key in matched), 4) if matched else None,
+        "treatment_estimate": round(scale * statistics.mean(treat[key] for key in matched), 4) if matched else None,
+        "paired_difference": round(scale * statistics.mean(differences), 4) if matched else None,
+        "confidence_interval_95": ci,
+        "method": "paired percentile bootstrap, 5000 seed-cluster resamples" if ci else
+                  "paired difference; CI unavailable below 30 pairs or five matched seeds",
+        "unit": "percentage points" if metric in BINARY_METRICS else "seconds",
+        "matched_trials": [{"key": list(key), "baseline": base[key], "treatment": treat[key]}
+                           for key in matched],
+    }
+
+
 def _cell(stat: dict[str, float | int | None]) -> str:
     if stat["mean"] is None:
         return "   -   "
@@ -133,6 +239,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--group", nargs="+", action="append", metavar=("LABEL", "FILE"),
                         required=True, help="A layer label followed by one run file per seed. Repeatable; list baseline first.")
+    parser.add_argument("--paired-metric", choices=tuple(PAIRED_METRICS),
+                        help="Also compare each treatment with baseline by seed, challenge, phase and delay")
+    parser.add_argument("--paired-json", type=Path,
+                        help="Write paired comparisons and auditable matched trials as JSON")
     args = parser.parse_args()
 
     groups: list[tuple[str, list[Path]]] = []
@@ -141,33 +251,51 @@ def main() -> int:
             parser.error(f"--group {entry[0]!r} needs at least one run file")
         groups.append((entry[0], [Path(p) for p in entry[1:]]))
 
-    summaries = [(label, summarize_group(paths)) for label, paths in groups]
-    baseline_label, baseline = summaries[0]
+    is_trial_log = any(path.suffix == ".jsonl" for _, paths in groups for path in paths)
+    if is_trial_log and not args.paired_metric:
+        parser.error("JSONL trial logs require --paired-metric")
+    summaries = [] if is_trial_log else [(label, summarize_group(paths)) for label, paths in groups]
+    if summaries:
+        baseline_label, baseline = summaries[0]
 
-    width = max(len(label) for label, _ in summaries) + 2
-    header = f"{'LAYER':<{width}}" + "".join(f"{desc:<28}" for _, desc, _ in METRICS)
-    print("LAYER COMPARISON  (mean ± 95% CI across seeds; baseline = first group)")
-    print("=" * len(header))
-    print(header)
-    print("-" * len(header))
-    for label, summary in summaries:
-        row = f"{label:<{width}}" + "".join(f"{_cell(summary[key]):<28}" for key, _, _ in METRICS)
-        print(row)
-
-    print("\nDELTA vs baseline (" + baseline_label + ")")
-    print("-" * len(header))
-    for label, summary in summaries[1:]:
-        cells = []
-        for key, _, _ in METRICS:
-            here, base = summary[key]["mean"], baseline[key]["mean"]
-            cells.append(f"{here - base:+.2f}" if (here is not None and base is not None) else "   -   ")
-        print(f"{label:<{width}}" + "".join(f"{cell:<28}" for cell in cells))
-
-    singletons = [label for label, summary in summaries
-                  if any(stat["n"] == 1 for stat in summary.values())]
-    if singletons:
-        print(f"\nNote: {', '.join(singletons)} had a single seed (n=1): point values, no CI, "
-              "not yet significance-testable. Add more seeds before claiming a difference.")
+    if summaries:
+        width = max(len(label) for label, _ in summaries) + 2
+        header = f"{'LAYER':<{width}}" + "".join(f"{desc:<28}" for _, desc, _ in METRICS)
+        print("LAYER COMPARISON  (mean ± 95% CI across seeds; baseline = first group)")
+        print("=" * len(header))
+        print(header)
+        print("-" * len(header))
+        for label, summary in summaries:
+            row = f"{label:<{width}}" + "".join(f"{_cell(summary[key]):<28}" for key, _, _ in METRICS)
+            print(row)
+        print("\nDELTA vs baseline (" + baseline_label + ")")
+        print("-" * len(header))
+        for label, summary in summaries[1:]:
+            cells = []
+            for key, _, _ in METRICS:
+                here, base = summary[key]["mean"], baseline[key]["mean"]
+                cells.append(f"{here - base:+.2f}" if (here is not None and base is not None) else "   -   ")
+            print(f"{label:<{width}}" + "".join(f"{cell:<28}" for cell in cells))
+        singletons = [label for label, summary in summaries
+                      if any(stat["n"] == 1 for stat in summary.values())]
+        if singletons:
+            print(f"\nNote: {', '.join(singletons)} had a single seed (n=1): point values, no CI, "
+                  "not yet significance-testable. Add more seeds before claiming a difference.")
+    if args.paired_metric:
+        comparisons = [paired_compare(groups[0][1], paths, args.paired_metric,
+                                      groups[0][0], label) for label, paths in groups[1:]]
+        print("\nPAIRED COMPARISONS (treatment - baseline; matched trials only)")
+        for comparison in comparisons:
+            print(f"{comparison['baseline']} -> {comparison['treatment']}: "
+                  f"{comparison['metric']} n={comparison['n_matched']} "
+                  f"difference={comparison['paired_difference']} "
+                  f"95% CI={comparison['confidence_interval_95']} "
+                  f"unmatched={comparison['n_unmatched_baseline']}/"
+                  f"{comparison['n_unmatched_treatment']}")
+        if args.paired_json:
+            args.paired_json.write_text(json.dumps(comparisons, indent=2), encoding="utf-8")
+    elif args.paired_json:
+        parser.error("--paired-json requires --paired-metric")
     return 0
 
 
