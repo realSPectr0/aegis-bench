@@ -6,3 +6,4 @@ venv/
 .benchmarks/
 .pytest_cache/
 plots/
+artifacts/
