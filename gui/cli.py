@@ -153,20 +153,20 @@ class Terminal:
         curses.start_color()
         curses.use_default_colors()
         if curses.COLORS >= 256:
-            curses.init_pair(C_ACCENT,     73,  -1)    # muted teal
+            curses.init_pair(C_ACCENT,    141,  -1)    # violet accent
             curses.init_pair(C_TITLE,      255, -1)    # bright white
             curses.init_pair(C_WARN,       179, -1)    # warm amber
             curses.init_pair(C_ERROR,      167, -1)    # soft red
             curses.init_pair(C_DIM,        243, -1)    # medium gray
-            curses.init_pair(C_SELECT,     16,  73)    # dark on teal
+            curses.init_pair(C_SELECT,     16, 141)    # dark on violet
             curses.init_pair(C_SUCCESS,    108, -1)    # sage green
-            curses.init_pair(C_HEADER_BG,  73,  236)   # teal on dark
-            curses.init_pair(C_TAB_ACT,    16,  73)    # dark on teal
+            curses.init_pair(C_HEADER_BG, 141,  236)   # violet on charcoal
+            curses.init_pair(C_TAB_ACT,    16, 141)    # dark on violet
             curses.init_pair(C_TAB_INACT,  250, 238)   # light on charcoal
             curses.init_pair(C_FIELD_LBL,  246, -1)    # light gray
             curses.init_pair(C_FIELD_VAL,  252, -1)    # near white
-            curses.init_pair(C_LOG_KEY,    110, -1)    # soft blue
-            curses.init_pair(C_BORDER_F,   73,  -1)    # teal borders
+            curses.init_pair(C_LOG_KEY,    117, -1)    # soft blue
+            curses.init_pair(C_BORDER_F,  141,  -1)    # violet borders
             curses.init_pair(C_STATUS_RUN, 114, -1)    # green
             curses.init_pair(C_STATUS_OK,  108, -1)    # sage
         else:
@@ -225,7 +225,7 @@ class Terminal:
     def draw_header(self, width):
         """Render the top header bar."""
         self.put(0, 0, ' ' * width, C_HEADER_BG)
-        self.put(0, 1, ' Aegis Bench ', C_HEADER_BG, True)
+        self.put(0, 1, ' AEGISBENCH  /  SECURITY EVALUATION ', C_HEADER_BG, True)
         status = self.active_status()
         if status == 'RUNNING':
             self.spin_frame = (self.spin_frame + 1) % len(SYM_SPINNER)
@@ -1028,7 +1028,7 @@ class ControlPanel(Terminal):
         else:
             # Setup panel
             left = min(52, max(38, w // 3 + 8))
-            self.frame(4, 1, h - 8, left, 'Run Setup', 'setup')
+            self.frame(4, 1, h - 8, left, 'CONFIGURE RUN  ·  SPACE/ENTER TO TOGGLE', 'setup')
             labels = [
                 ('Model',       self.config['model']),
                 ('Wrapper',     'Off (direct)' if self.stack == 'Ollama' else f'{self.stack} (auto-start)'),
@@ -1046,7 +1046,7 @@ class ControlPanel(Terminal):
                 self.hits.append((y, 3, 1, left - 4, 'setup', index))
 
             # Separator
-            self.put(12, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
+            self.put(12, 3, f'   {BD_H * max(1, left - 8)}', C_BORDER_F)
 
             # Part checkboxes
             part_labels = [PART_LABELS[part] for part in ALL_PARTS]
