@@ -5,7 +5,9 @@ from pathlib import Path
 import json
 import tempfile
 
-from gauntlet_runner import build_commands, build_parser, find_part_reports, report_finished
+import gauntlet_runner
+from gauntlet_runner import build_commands, build_parser, find_part_reports, needs_judge, report_finished
+from unittest import mock
 
 
 class GauntletRunnerTests(unittest.TestCase):
@@ -27,6 +29,19 @@ class GauntletRunnerTests(unittest.TestCase):
             local = commands["Part 2 — Local Security Challenges"]
             self.assertEqual(local[local.index("--resume-from") + 1], str(reports["local"]))
             self.assertNotIn("--resume-from", commands["Part 3 — Indirect Prompt Injection"])
+
+    def test_memory_poisoning_alone_is_a_valid_run(self):
+        flags = ["--model", "example", "--skip-questions", "--skip-local", "--skip-agent-safety",
+                 "--run-memory-poisoning", "--condition", "poisoned", "--no-audio"]
+        args = build_parser().parse_args(flags)
+        self.assertEqual([name for name, _ in build_commands(args, Path("results/run"))],
+                         ["Part 4 — Memory Poisoning (poisoned)"])
+        self.assertTrue(needs_judge(args))  # its challenges are judge-reviewed, so preflight the judge
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(sys, "argv", ["gauntlet_runner.py", *flags, "--output-dir", folder,
+                                                "--judge-provider", "heuristic"]), \
+                mock.patch.object(gauntlet_runner, "build_commands", return_value=[]):
+            gauntlet_runner.main()  # must not reject the run as having no parts
 
     def test_default_llama_target_is_forwarded_to_every_part(self):
         args = build_parser().parse_args([])

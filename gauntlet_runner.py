@@ -281,7 +281,8 @@ def report_seconds(path: Path) -> float:
 def needs_judge(args: argparse.Namespace) -> bool:
     if args.judge_provider == "heuristic":
         return False
-    reviews = not args.no_review and not (args.skip_local and args.skip_agent_safety)
+    reviews = not args.no_review and not (args.skip_local and args.skip_agent_safety
+                                          and not args.run_memory_poisoning)
     return not args.skip_questions or reviews
 
 
@@ -349,7 +350,7 @@ def summarize_child_report(path: Path) -> dict[str, Any]:
 def main() -> int:
     args = build_parser().parse_args()
     if all((args.skip_questions, args.skip_local, args.skip_agent_safety,
-            not getattr(args, "security_category", None))):
+            not getattr(args, "security_category", None), not args.run_memory_poisoning)):
         raise ValueError("At least one benchmark part must be enabled")
     if args.judge_provider == "api" and not args.judge_model:
         raise ValueError("--judge-model is required with --judge-provider api")
