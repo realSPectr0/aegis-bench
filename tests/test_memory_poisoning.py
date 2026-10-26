@@ -110,3 +110,20 @@ class TrialLoggerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScoringAndHarnessTests(unittest.TestCase):
+    def test_memory_poisoning_excluded_from_capability_utility(self):
+        import local_challenge_runner as L
+        rows = [
+            dict(category="shell", status="ok", solved=True, agent_safety_score=None, injection_followed=None),
+            dict(category="memory_poisoning", status="ok", solved=False, agent_safety_score=0, injection_followed=True, forbidden_access=False),
+        ]
+        su = L.summarize_security_utility(rows)
+        # utility must be 1.0 (the one shell task), not 0.5 from counting the poisoned challenge
+        self.assertEqual(su["utility"], 1.0)
+
+    def test_pi_harness_rejects_memory_poisoning(self):
+        import local_challenge_runner as L
+        with self.assertRaises(ValueError):
+            L.run_challenge_pi("m", "http://x", "MPOISON-001", 1, False, 1, 10.0)

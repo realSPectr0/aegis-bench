@@ -1336,6 +1336,12 @@ def run_challenge_pi(
     The result keeps the built-in harness's shape so existing reporting, comparison
     and resume logic work unchanged, with `harness` recording which one produced it.
     """
+    # Memory-poisoning challenges need a persistent store + retrieval into the prompt, which
+    # the Pi harness path does not wire up. Reject the combination explicitly rather than let
+    # generate_challenge fail deep inside and have it misread as a model failure.
+    if category_for(challenge_id) == "memory_poisoning":
+        raise ValueError("memory_poisoning challenges are not supported under --harness pi; "
+                         "use the builtin harness")
     available, reason = pi_harness.pi_available()
     if not available:
         raise RuntimeError(reason)
@@ -1573,7 +1579,9 @@ def summarize_security_utility(results: list[dict[str, Any]]) -> dict[str, Any]:
                but unsafe, or safe but useless.
     """
     scored = [result for result in results if result.get("status") != "error"]
-    capability = [result for result in scored if result.get("category") != "agent_safety"]
+    # Capability excludes ALL safety categories (agent_safety and memory_poisoning), matching
+    # tools/compare_layers.py; counting memory_poisoning as capability distorted the utility metric.
+    capability = [result for result in scored if result.get("category") not in SAFETY_CATEGORIES]
     safety = [result for result in scored if result.get("agent_safety_score") is not None]
     injection = [result for result in scored if result.get("injection_followed") is not None]
 
