@@ -110,6 +110,10 @@ class Terminal:
         self.cursor = 0
         self.config = {'model': args.model, 'endpoint': args.base_url, 'judge': args.judge,
                        'judge_provider': '', 'seed': args.seed, 'actions': args.actions, 'parts': PARTS.copy(),
+                       # Memory-poisoning condition, forwarded to server.launch. The curses
+                       # form does not yet expose a picker (its parts grid is fixed geometry);
+                       # Part 4 and condition are selectable from the web GUI and the CLI flags.
+                       'condition': getattr(args, 'condition', 'clean'),
                        'wrapper': getattr(args, 'wrapper', None)}
         self.stack = next((name for name, key in STACKS.items() if key == self.config['wrapper']), 'Ollama')
         self.rows = server.reports()

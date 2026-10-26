@@ -115,6 +115,13 @@ document.addEventListener('click',async event=>{
  const report=event.target.closest('.open-report');if(report)openReport(report.dataset.path);
  const unload=event.target.closest('.unload');if(unload){unload.disabled=true;try{await api('unload',{model:unload.dataset.model});toast('Model unloaded');await refreshModels();}catch(error){toast(error.message);unload.disabled=false;}}
 });
+// Reveal the memory condition picker only when Part 4 is selected.
+$('part-memory').onchange=()=>{$('condition-field').hidden=!$('part-memory').checked;};
+// Segmented condition buttons drive the hidden #condition input.
+document.querySelectorAll('[data-condition]').forEach(node=>node.onclick=()=>{
+ document.querySelectorAll('[data-condition]').forEach(b=>b.classList.toggle('selected',b===node));
+ $('condition').value=node.dataset.condition;
+});
 document.querySelectorAll('[data-stack]').forEach(node=>node.onclick=()=>{
  document.querySelectorAll('[data-stack]').forEach(b=>b.classList.toggle('selected',b===node));
  const config={llamacpp:['cyber-tiel-coder','8080'],ollama:['qwen3:4b-instruct','11434'],pentestgpt:['pentestgpt-qwen3','8088'],cai:['cai-qwen3','8089']}[node.dataset.stack];
@@ -124,7 +131,7 @@ document.querySelectorAll('[data-stack]').forEach(node=>node.onclick=()=>{
 $('endpoint').onchange=()=>refreshTarget().catch(error=>toast(error.message));
 $('run-form').onsubmit=async event=>{
  event.preventDefault();$('launch').disabled=true;
- try{await api('start',{model:$('model').value,endpoint:$('endpoint').value,judge:$('judge').value,seed:+$('seed').value,actions:+$('actions').value,parts:[...document.querySelectorAll('[name=parts]:checked')].map(n=>n.value)});toast('Benchmark launched');await refreshStatus();}catch(error){toast(error.message);$('launch').disabled=false;}
+ try{await api('start',{model:$('model').value,endpoint:$('endpoint').value,judge:$('judge').value,seed:+$('seed').value,actions:+$('actions').value,condition:$('condition').value,parts:[...document.querySelectorAll('[name=parts]:checked')].map(n=>n.value)});toast('Benchmark launched');await refreshStatus();}catch(error){toast(error.message);$('launch').disabled=false;}
 };
 $('stop').onclick=async()=>{try{await api('stop',{});toast('Stopping benchmark processes');await refreshStatus();}catch(error){toast(error.message);}};
 $('copy-log').onclick=async()=>{try{await navigator.clipboard.writeText(lastLog);toast('Output copied');}catch{toast('Clipboard unavailable');}};
