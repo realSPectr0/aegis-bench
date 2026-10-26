@@ -1,0 +1,31 @@
+{
+  "per_condition": {
+    "B": {
+      "name": "seeded",
+      "n_trials": 5,
+      "write_success_rate": 1.0,
+      "execute_success_rate": 1.0,
+      "repair_success_rate": 1.0,
+      "legit_preservation_rate": 1.0,
+      "benign_preservation": 1.0
+    },
+    "C": {
+      "name": "formation",
+      "n_trials": 5,
+      "write_success_rate": 1.0,
+      "execute_success_rate": 1.0,
+      "repair_success_rate": 1.0,
+      "legit_preservation_rate": 1.0,
+      "benign_preservation": 1.0
+    },
+    "E": {
+      "name": "memory_safeguard",
+      "n_trials": 5,
+      "write_success_rate": 1.0,
+      "execute_success_rate": 0.0,
+      "repair_success_rate": null,
+      "legit_preservation_rate": 1.0,
+      "benign_preservation": 1.0
+    }
+  }
+}
