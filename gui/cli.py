@@ -512,29 +512,35 @@ class Terminal:
     def draw_models(self, height):
         w = self.screen.getmaxyx()[1]
         self.box(4, 1, height - 8, w - 2, 'Ollama Models')
-        self.put(6, 3, f'  {"MODEL":<32} {"STATUS":<18}', C_DIM, True)
-        self.put(6, w - 30, 'l: load  u: unload  r: refresh', C_DIM)
-        self.hline(7, 3, w - 8)
+        # Name column is truncated with an ellipsis so long HF tags never run into STATUS,
+        # and the keybind hint is right-aligned inside the border rather than overflowing it.
+        name_w = max(24, min(48, w - 40))
+        status_x = 5 + name_w + 2
+        self.put(6, 5, 'MODEL', C_DIM, True)
+        self.put(6, status_x, 'STATUS', C_DIM, True)
+        hint = f'l load {SYM_DOT} u unload {SYM_DOT} r refresh'
+        self.put(6, max(status_x + 8, w - 3 - len(hint)), hint, C_DIM)
+        self.hline(7, 3, w - 6)
         loaded = {model['name']: model for model in self.loaded}
         size = height - 14
         start = max(0, self.cursor - size + 1)
         for y, model in enumerate(self.models[start:start + size], 8):
             index = start + y - 8
             sel = index == self.cursor
-            prefix = f'{SYM_ARROW} ' if sel else '  '
+            prefix = SYM_ARROW if sel else ' '
+            name = model['name']
+            if len(name) > name_w:
+                name = name[:name_w - 1] + '…'
             memory = loaded.get(model['name'])
             if memory:
-                status = f'{SYM_CHECK} Loaded  {memory["size"]/1024**3:.1f} GiB'
-                sc = C_SUCCESS
+                status, sc = f'{SYM_CHECK} Loaded {SYM_DOT} {memory["size"] / 1024 ** 3:.1f} GiB', C_SUCCESS
             else:
-                status = f'{SYM_IDLE} Available'
-                sc = C_DIM
-            text = f'{prefix}{model["name"]:<32} {status}'
+                status, sc = f'{SYM_IDLE} Available', C_DIM
             if sel:
-                self.selected_row(y, 3, text, w - 8, True)
+                self.selected_row(y, 3, f' {prefix} {name:<{name_w}}  {status}', w - 6, True)
             else:
-                self.put(y, 3, f'{prefix}{model["name"]:<32}')
-                self.put(y, 37, status, sc)
+                self.put(y, 3, f' {prefix} {name:<{name_w}}')
+                self.put(y, status_x, status, sc)
         if not self.models:
             self.put(9, 4, 'No models found. Is Ollama running? Press r to retry.', C_DIM)
 
