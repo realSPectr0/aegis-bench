@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive Clanker Gauntlet terminal. Run: python gui/cli.py"""
+"""Interactive AegisBench terminal. Run: python gui/cli.py"""
 import argparse
 import curses
 import json
@@ -10,19 +10,47 @@ import threading
 import time
 import textwrap
 
+MODEL_POLL_SECONDS = 3
+
 import server
 import codex_models
+import claude_models
 import report_model
 
 sys.path.insert(0, str(server.ROOT))
-from benchmark_runner import ANTHROPIC_MODELS
+import local_challenge_runner
 
 
+_OVERVIEW_CACHE = []
+
+
+def benchmark_overview():
+    """Count Part 1 questions by subpart and Part 2/3 challenges by category from the live suites."""
+    if _OVERVIEW_CACHE:
+        return _OVERVIEW_CACHE[0]
+    with open(server.ROOT / 'benchmarks' / 'part1_safety.json', encoding='utf-8') as handle:
+        questions = json.load(handle)['tests']
+    subparts = {}
+    for test in questions:
+        subparts[test['subpart']] = subparts.get(test['subpart'], 0) + 1
+    local_labels = [('shell', 'shell'), ('forensics', 'forensics'), ('secure_code', 'secure code'),
+                    ('web_security', 'web security'), ('long_horizon', 'incident response')]
+    local = [(label, len(local_challenge_runner.challenge_ids([category]))) for category, label in local_labels]
+    agent = [('prompt injection', len(local_challenge_runner.challenge_ids(['agent_safety'])))]
+    part1 = [(name.replace('_', ' '), count) for name, count in subparts.items()]
+    parts = [('Part 1: Safety', part1), ('Part 2: Local', local), ('Part 3: Agent', agent)]
+    total = sum(count for _, items in parts for _, count in items)
+    _OVERVIEW_CACHE.append((total, parts))
+    return total, parts
+
+
+# Wrapper choices; the run starts the wrapper itself, in front of the selected
+# Ollama model, so Model and Endpoint always name the backend.
 STACKS = {
-    'Ollama': ('hf.co/peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF-MTP:UD-Q4_K_M',
-               'http://127.0.0.1:11434/v1'),
-    'PentestGPT': ('pentestgpt-qwen3', 'http://localhost:8088/v1'),
-    'CAI adapter': ('cai-qwen3', 'http://localhost:8089/v1'),
+    'Ollama': None,
+    'PentestGPT': 'pentestgpt',
+    'CAI adapter': 'cai',
+    'VulnBot': 'vulnbot',
 }
 PARTS = ['questions', 'local', 'agent-safety']
 
@@ -80,9 +108,10 @@ class Terminal:
         self.screen = screen
         self.tab = -1
         self.cursor = 0
-        self.stack = 'Ollama'
         self.config = {'model': args.model, 'endpoint': args.base_url, 'judge': args.judge,
-                       'judge_provider': '', 'seed': args.seed, 'actions': 30, 'parts': PARTS.copy()}
+                       'judge_provider': '', 'seed': args.seed, 'actions': args.actions, 'parts': PARTS.copy(),
+                       'wrapper': getattr(args, 'wrapper', None)}
+        self.stack = next((name for name, key in STACKS.items() if key == self.config['wrapper']), 'Ollama')
         self.rows = server.reports()
         self.models = []
         self.loaded = []
@@ -98,6 +127,7 @@ class Terminal:
         screen.timeout(250)
         self._init_colors()
         self.refresh_models()
+        self.last_model_poll = time.monotonic()
 
     def _init_colors(self):
         if not curses.has_colors():
@@ -177,7 +207,7 @@ class Terminal:
     def draw_header(self, width):
         """Render the top header bar."""
         self.put(0, 0, ' ' * width, C_HEADER_BG)
-        self.put(0, 1, ' CLANKER GAUNTLET ', C_HEADER_BG, True)
+        self.put(0, 1, ' Aegis Bench ', C_HEADER_BG, True)
         status = self.active_status()
         if status == 'RUNNING':
             self.spin_frame = (self.spin_frame + 1) % len(SYM_SPINNER)
@@ -243,7 +273,7 @@ class Terminal:
             tagline = f'Local-first {SYM_DOT} Reproducible {SYM_DOT} Research-grade'
             self.put(menu_top + 7, max(2, (width - len(tagline)) // 2), tagline, C_DIM)
 
-    def refresh_models(self):
+    def refresh_models(self, quiet=False):
         if self.busy:
             return
         self.busy = True
@@ -252,9 +282,11 @@ class Terminal:
             try:
                 self.models = server.ollama('api/tags').get('models', [])
                 self.loaded = server.ollama('api/ps').get('models', [])
-                self.set_notice(f'Ollama connected {SYM_DOT} {len(self.loaded)} loaded model(s)')
+                if not quiet:
+                    self.set_notice(f'Ollama connected {SYM_DOT} {len(self.loaded)} loaded model(s)')
             except Exception as exc:
-                self.set_notice(f'Ollama unavailable: {exc}', 'warn')
+                if not quiet:
+                    self.set_notice(f'Ollama unavailable: {exc}', 'warn')
             finally:
                 self.busy = False
         threading.Thread(target=worker, daemon=True).start()
@@ -492,7 +524,8 @@ class Terminal:
             lines += ['', 'CASES', BD_H * 50]
             for case in data['results']:
                 grade = case.get('grade') or {}
-                result = f'{grade["score"]}/10' if 'score' in grade else case.get('status', 'unknown')
+                result = (report_model.grading_scale.result_text(grade) if 'score' in grade or 'points' in grade
+                          else case.get('status', 'unknown'))
                 lines.append(f'  {case.get("id", "?"):<36} {result}')
                 if case.get('error'):
                     lines.append('    ' + case['error'])
@@ -502,7 +535,7 @@ class Terminal:
             if self.cursor == 0:
                 names = list(STACKS)
                 self.stack = names[(names.index(self.stack) + 1) % len(names)]
-                self.config['model'], self.config['endpoint'] = STACKS[self.stack]
+                self.config['wrapper'] = STACKS[self.stack]
             elif self.cursor < 6:
                 key = ['stack', 'model', 'endpoint', 'judge', 'seed', 'actions'][self.cursor]
                 value = self.edit(key, self.config[key])
@@ -594,7 +627,6 @@ class ControlPanel(Terminal):
         self.follow = {'output': True, 'judge': True, 'machine': True}
         self.hits = []
         self.set_notice('Ready. Select a model, wrapper, and parts to begin.')
-        self.direct_model = args.model
         self.page_detail = None
         self.detail_offset = 0
         self.detail_group = None
@@ -606,8 +638,20 @@ class ControlPanel(Terminal):
         self.judge_models = codex_models.cached_models()
         self.judge_source = 'cached catalog' if self.judge_models else 'catalog unavailable'
         self.judge_busy = False
+        self.claude_models = claude_models.fallback_models()
+        self.claude_source = 'built-in list'
         self.refresh_judges()
         self.build_groups()
+        if getattr(args, 'resume', None) or getattr(args, 'start', False):
+            if getattr(args, 'resume', None):
+                self.config['resume'] = args.resume
+            try:
+                server.launch(self.config)
+                self.tab, self.focus = 3, 'machine'
+                self.set_notice(f'Resuming {args.resume}.' if args.resume else f'Started {args.model}.')
+            except ValueError as exc:
+                self.set_notice(str(exc), 'error')
+            self.config.pop('resume', None)
         try:
             curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
         except curses.error:
@@ -617,6 +661,16 @@ class ControlPanel(Terminal):
         if self.judge_busy:
             return
         self.judge_busy = True
+
+        def claude_worker():
+            try:
+                rows = claude_models.discover_models()
+                if rows:
+                    self.claude_models = rows
+                    self.claude_source = 'Anthropic /v1/models'
+            except Exception:
+                pass
+        threading.Thread(target=claude_worker, daemon=True).start()
 
         def worker():
             try:
@@ -754,6 +808,8 @@ class ControlPanel(Terminal):
                     lines += ['', 'MODEL ACTION:', action_text]
                 else:
                     lines += ['MODEL ACTION:', text]
+            elif kind == 'machine_forced':
+                lines += ['RETRY WITHOUT THINKING: reasoning ended without an action; asking for the action directly.']
             elif kind == 'machine_command':
                 lines += [f'SANDBOX COMMAND ({event["source"]}):', f'$ {event["command"]}']
             elif kind == 'machine_result':
@@ -773,16 +829,16 @@ class ControlPanel(Terminal):
 
     def draw_home_page(self, h, w):
         logo = [
-            '  ___  _              _               ',
-            ' / __|| | __ _  _ _  | |__ ___  _ _   ',
-            '| (__ | |/ _` || \' \\ | / // -_)| \'_|  ',
-            ' \\___||_|\\__,_||_||_||_\\_\\\\___||_|    ',
+            '   _   ___ ___ ___ ___ ',
+            '  /_\\ | __/ __|_ _/ __|',
+            ' / _ \\| _| (_ || |\\__ \\',
+            '/_/ \\_\\___\\___|___|___/',
         ]
         cx = max(2, (w - 76) // 2)
         top = 5
         for i, line in enumerate(logo):
             self.put(top + i, cx + 1, line, C_ACCENT, True)
-        self.put(top + 4, cx + 1, 'G A U N T L E T', C_TITLE, True)
+        self.put(top + 4, cx + 1, 'B E N C H', C_TITLE, True)
         self.put(top + 5, cx + 1, 'LLM Security Benchmark Framework', C_DIM)
 
         # --- Full-width benchmark overview ---
@@ -790,7 +846,7 @@ class ControlPanel(Terminal):
         total_w = min(76, w - cx - 2)
         left_w = max(30, total_w // 2)
         right_w = total_w - left_w - 2
-        card_h = 18 if h > 42 else min(h - card_top - 10, 15)
+        card_h = 20 if h > 44 else min(h - card_top - 10, 15)
 
         # Left card: System Status
         self.box(card_top, cx, card_h, left_w, 'System Status')
@@ -825,28 +881,12 @@ class ControlPanel(Terminal):
         if right_w >= 24:
             self.box(card_top, rx, card_h, right_w, 'The Benchmark')
             ry = card_top + 2
-            self.put(ry, rx + 3, '91 total test cases', C_FIELD_VAL)
+            total, parts = benchmark_overview()
+            self.put(ry, rx + 3, f'{total} total test cases', C_FIELD_VAL)
             ry += 1
             self.hline(ry, rx + 2, right_w - 4)
             ry += 1
 
-            parts = [
-                ('Part 1: Safety', [
-                    ('harmful requests',   '22'),
-                    ('benign controls',    '14'),
-                    ('bounded dual-use',    '8'),
-                ]),
-                ('Part 2: Local', [
-                    ('shell',              '15'),
-                    ('forensics',           '5'),
-                    ('secure code',         '8'),
-                    ('web security',        '8'),
-                    ('incident response',   '1'),
-                ]),
-                ('Part 3: Agent', [
-                    ('prompt injection',   '10'),
-                ]),
-            ]
             for title, items in parts:
                 if ry >= card_top + card_h - 1:
                     break
@@ -856,7 +896,7 @@ class ControlPanel(Terminal):
                     if ry >= card_top + card_h - 1:
                         break
                     self.put(ry, rx + 5, label, C_DIM)
-                    self.put(ry, rx + right_w - len(count) - 3, count, C_FIELD_VAL)
+                    self.put(ry, rx + right_w - len(str(count)) - 3, str(count), C_FIELD_VAL)
                     ry += 1
 
         # Navigation menu
@@ -892,7 +932,7 @@ class ControlPanel(Terminal):
                 label = {'question': 'QUESTION', 'target_answer': 'TARGET ANSWER', 'target_error': 'TARGET ERROR'}[event['kind']]
                 lines.extend(['', f'{label} {SYM_DOT} {event["test_id"]}', event.get('text', '')])
         judge_lines = ['Part 1: question -> target -> judge grade', '',
-                       'Parts 2 and 3 use local verifiers.']
+                       'Parts 2 and 3: local verifiers score; the judge reviews each attempt.']
         for event in events:
             kind = event['kind']
             if kind == 'judge_started':
@@ -904,9 +944,25 @@ class ControlPanel(Terminal):
                 judge_lines += ['Awaiting judge response...']
             elif kind == 'judge_grade':
                 grade = event['grade']
-                judge_lines += ['', f'SCORE {grade["score"]}/10 {SYM_DOT} {grade.get("label", "")}',
-                                grade.get('rationale', ''), grade.get('safety_behavior', '')]
+                if report_model.grading_scale.is_current(grade):
+                    tag = grade.get('tag')
+                    verdict = (f'{report_model.grading_scale.result_text(grade)} {SYM_DOT} {grade["outcome"].title()}'
+                               + (f' ({report_model.grading_scale.TAG_TEXT[tag]})' if tag else ''))
+                else:
+                    verdict = f'SCORE {grade["score"]}/10 {SYM_DOT} {grade.get("label", "")}'
+                judge_lines += ['', verdict, grade.get('rationale', ''), grade.get('safety_behavior', '')]
             elif kind == 'judge_error':
+                judge_lines += [f'JUDGE ERROR: {event["text"]}']
+            elif kind == 'review_started':
+                outcome = 'solved' if event.get('solved') else (event.get('status') or 'unsolved')
+                judge_lines += ['', f'JUDGE REVIEW {SYM_DOT} {event["test_id"]} ({outcome})',
+                                'Awaiting judge review...']
+            elif kind == 'run_review_started':
+                judge_lines += ['', f'JUDGE RUN REVIEW {SYM_DOT} {event["tasks"]} tasks',
+                                'Awaiting judge summary...']
+            elif kind in ('review_done', 'run_review_done'):
+                judge_lines += report_model.review_lines(event['review'])
+            elif kind == 'review_error':
                 judge_lines += [f'JUDGE ERROR: {event["text"]}']
         for rect, content, area, label in ((output, lines, 'output', 'Runner Output'),
                                            (judge, judge_lines, 'judge', 'Judge Exchange'),
@@ -957,7 +1013,7 @@ class ControlPanel(Terminal):
             self.frame(4, 1, h - 8, left, 'Run Setup', 'setup')
             labels = [
                 ('Model',       self.config['model']),
-                ('Wrapper',     'Off (direct)' if self.stack == 'Ollama' else self.stack),
+                ('Wrapper',     'Off (direct)' if self.stack == 'Ollama' else f'{self.stack} (auto-start)'),
                 ('Endpoint',    self.config['endpoint']),
                 ('Judge',       self.config['judge'] or 'Codex default'),
                 ('Seed',        str(self.config['seed'])),
@@ -1068,10 +1124,12 @@ class ControlPanel(Terminal):
             prefix = f'{SYM_ARROW} ' if sel else '  '
             text = f'{prefix}{group["model"][:23]:<24} {group["date"][:10]}  {saved[:28]:<30} {top_metric}'
             self.selected_row(header_y + 2 + i, 3, text, w - 7, sel)
-        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDF  r: refresh', C_DIM)
+        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDFs  r: refresh', C_DIM)
 
     def score_color(self, score, direction='lower'):
         """Return color for a score. For 'lower is better' (harmful compliance), low=green high=red."""
+        if direction == 'rate':  # a pass rate in percent
+            return C_SUCCESS if score >= 70 else C_WARN if score >= 40 else C_ERROR
         if direction == 'lower':
             if score <= 2:
                 return C_SUCCESS
@@ -1118,10 +1176,12 @@ class ControlPanel(Terminal):
         if len(lines) > size:
             pct = int(100 * min(1, (self.detail_offset + size) / len(lines)))
             self.put(4, w - 10, f' {pct:>3}% ', C_DIM)
-        nav = 'e: export PDF  n/N: next/prev case  1-3: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
+        nav = 'e: export PDFs  n/N: next/prev case  1-3: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
         self.put(h - 4, 3, nav[:w - 7], C_DIM)
 
     def case_color(self, case):
+        if case.get('outcome'):
+            return {'pass': C_SUCCESS, 'partial': C_WARN, 'fail': C_ERROR}[case['outcome']]
         if case['kind'] == 'challenge' and case['score'] is None:
             return C_SUCCESS if case.get('solved') else C_ERROR if case['error'] else C_WARN
         if case['score'] is None:
@@ -1165,15 +1225,24 @@ class ControlPanel(Terminal):
                 add('muted', 'No saved report for this part.', 2)
                 continue
             add('muted', f'{len(part["cases"])} cases  {SYM_DOT}  {report_model.seconds(part["total_seconds"])}', 2)
+            if part['data'].get('run_review'):
+                add('label', 'Judge review of the run (does not affect scores)', 2)
+                for line in report_model.review_lines(part['data']['run_review']):
+                    add('thinking', line, 4 + 2 * line.startswith('  '))
             for metric in part['metrics']:
                 category = part['data'].get('category_summaries', {}).get(metric['name'])
+                area = part['data'].get('research_area_summaries', {}).get(metric['name'])
+                current = part['data'].get('scale_version') == report_model.grading_scale.SCALE_VERSION
                 if category:
                     value = f'{category.get("solved", 0)}/{category.get("attempted", 0)} solved ({metric["value"]}%)'
+                elif area and current:
+                    value = report_model.grading_scale.summary_text(area)
                 else:
                     value = f'{metric["value"]}{metric["unit"]} ({metric["direction"]} is better)'
                 score = metric.get('value') if isinstance(metric.get('value'), (int, float)) else None
+                direction = 'rate' if area and current else metric.get('direction', 'lower')
                 lines.append({'kind': 'metric', 'name': report_model.title(metric['name']), 'value': value,
-                              'score': score, 'direction': metric.get('direction', 'lower')})
+                              'score': score, 'direction': direction})
             lines.append({'kind': 'separator'})
             for section, cases in part['sections'].items():
                 lines.append({'kind': 'subheader', 'text': f'{report_model.title(section)} ({len(cases)})'})
@@ -1207,7 +1276,12 @@ class ControlPanel(Terminal):
         judge = case['judge']
         if judge:
             confidence = f', confidence {judge["confidence"]}' if judge['confidence'] is not None else ''
-            add('label', f'Judge: {judge["score"]}/10 {judge["label"]}{confidence}  '
+            if judge['outcome']:
+                tag = f' ({report_model.grading_scale.TAG_TEXT[judge["tag"]]})' if judge['tag'] else ''
+                verdict = f'{judge["result"]} {judge["outcome"].title()}{tag}'
+            else:
+                verdict = f'{judge["score"]}/10 {judge["label"]}'
+            add('label', f'Judge: {verdict}{confidence}  '
                          f'({judge["grader"]}, {report_model.seconds(judge["seconds"])})', 4)
             if judge['safety_behavior']:
                 add('text', judge['safety_behavior'], 6, 2)
@@ -1229,6 +1303,10 @@ class ControlPanel(Terminal):
             if step['outcome']:
                 outcome = ' '.join(step['outcome'].split())
                 add('muted', f'{SYM_ARROW} {outcome}', 9, 1)
+        if case.get('review'):
+            add('label', 'Judge review', 4)
+            for line in report_model.review_lines(case['review']):
+                add('thinking', line, 6 + 2 * line.startswith('  '))
 
     def export_pdf(self, group):
         """Render the run to PDF on a worker thread so the UI stays responsive."""
@@ -1236,13 +1314,14 @@ class ControlPanel(Terminal):
             self.set_notice('A PDF export is already in progress.', 'warn')
             return
         self.exporting = True
-        self.set_notice(f'Exporting {group["model"]} run to PDF...')
+        self.set_notice(f'Exporting {group["model"]} run to PDF (the judge writes the summary; this can take a minute)...')
 
         def worker():
             try:
                 import report_pdf
                 path = report_pdf.export_rows(group['parts'], server.report_path)
-                self.set_notice(f'{SYM_CHECK} PDF saved: {path.relative_to(server.ROOT)}')
+                summary = report_pdf.summary_path(path).relative_to(server.ROOT)
+                self.set_notice(f'{SYM_CHECK} PDFs saved: {summary} (summary) + {path.name} (full)')
             except Exception as exc:
                 self.set_notice(f'PDF export failed: {type(exc).__name__}: {exc}', 'error')
             finally:
@@ -1256,38 +1335,37 @@ class ControlPanel(Terminal):
         if self.tab != 0 or self.focus != 'setup':
             return
         if self.cursor == 0:
-            names = [row['name'] for row in self.models] if self.stack == 'Ollama' else [self.config['model']]
+            names = [row['name'] for row in self.models]
             names = list(dict.fromkeys([self.config['model'], *names, 'Enter model name...']))
             name = self.pick('Select Target Model', names, self.config['model'])
             if name == 'Enter model name...':
                 name = self.edit('Model name', self.config['model'])
             if name:
                 self.config['model'] = name
-                if self.stack == 'Ollama':
-                    self.direct_model = name
         elif self.cursor == 1:
             current = {'Ollama': 'Off (direct Ollama)'}.get(self.stack, self.stack)
-            choice = self.pick('Inference Backend', ['Off (direct Ollama)', 'PentestGPT', 'CAI adapter'], current)
+            choice = self.pick('Inference Backend', ['Off (direct Ollama)', 'PentestGPT', 'CAI adapter', 'VulnBot'], current)
             if choice:
                 choice = {'Off (direct Ollama)': 'Ollama'}.get(choice, choice)
                 self.stack = choice
-                model, self.config['endpoint'] = STACKS[choice]
-                self.config['model'] = self.direct_model if choice == 'Ollama' else model
-                self.set_notice('Direct Ollama.' if choice == 'Ollama' else 'Wrapper must already be running.')
+                self.config['wrapper'] = STACKS[choice]
+                self.set_notice('Direct Ollama.' if choice == 'Ollama' else
+                                f'{choice} starts automatically in front of {self.config["model"]}.')
         elif self.cursor < 6:
             field = {2: 'endpoint', 3: 'judge', 4: 'seed', 5: 'actions'}[self.cursor]
             if field == 'judge':
                 choices = {'Codex configured default': ('', 'codex-cli')}
                 choices.update({row['name'] + ' / ' + row['id']: (row['id'], 'codex-cli') for row in self.judge_models})
-                for model_id, model_name in ANTHROPIC_MODELS:
-                    choices[model_name + ' / ' + model_id] = (model_id, 'anthropic')
+                for row in self.claude_models:
+                    choices[row['name'] + ' / ' + row['id']] = (row['id'], 'anthropic')
                 choices['Enter model ID...'] = (None, None)
                 current_judge = self.config['judge']
                 selected = next(
                     (label for label, (slug, _) in choices.items() if slug == current_judge),
                     'Codex configured default',
                 )
-                choice = self.pick('Judge Model / ' + self.judge_source, list(choices), selected)
+                choice = self.pick('Judge Model / ' + self.judge_source + ' + Claude: ' + self.claude_source,
+                                   list(choices), selected)
                 if choice == 'Enter model ID...':
                     value = self.edit('Judge model ID', self.config['judge'])
                     if value is not None:
@@ -1321,6 +1399,10 @@ class ControlPanel(Terminal):
 
     def run(self):
         while True:
+            # A benchmark loads and unloads models on its own, so keep the loaded list current.
+            if time.monotonic() - self.last_model_poll >= MODEL_POLL_SECONDS:
+                self.last_model_poll = time.monotonic()
+                self.refresh_models(quiet=True)
             self.draw()
             try:
                 key = self.screen.get_wch()
@@ -1444,6 +1526,8 @@ def headless_run(args):
         parts.append('local')
     if not args.skip_agent_safety:
         parts.append('agent-safety')
+    if getattr(args, 'memory_poisoning', False):
+        parts.append('memory-poisoning')
     if not parts:
         print('error: all parts skipped, nothing to run', file=sys.stderr)
         return 1
@@ -1458,11 +1542,16 @@ def headless_run(args):
         'seed': args.seed,
         'actions': args.actions,
         'parts': parts,
+        'condition': getattr(args, 'condition', 'clean'),
+        'resume': getattr(args, 'resume', None),
+        'wrapper': getattr(args, 'wrapper', None),
     }
     judge_label = args.judge or 'Codex configured default'
     if judge_provider == 'anthropic':
-        judge_label += ' (Anthropic)'
-    print(f'Clanker Gauntlet \u2014 headless run', flush=True)
+        judge_label += ' (Anthropic API)' if os.environ.get('ANTHROPIC_API_KEY') else ' (Claude CLI)'
+    elif judge_provider == 'claude-cli':
+        judge_label += ' (Claude CLI)'
+    print(f'AegisBench \u2014 headless run', flush=True)
     print(f'Model    : {args.model}', flush=True)
     print(f'Endpoint : {args.base_url}', flush=True)
     print(f'Judge    : {judge_label}', flush=True)
@@ -1512,21 +1601,54 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', default=os.getenv(
         'BENCHMARK_MODEL',
-        'hf.co/peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF-MTP:UD-Q4_K_M'))
+        'qwen3.5:9b'))
     parser.add_argument('--base-url', default=os.getenv(
         'BENCHMARK_BASE_URL', 'http://127.0.0.1:11434/v1'))
     parser.add_argument('--judge', default='', help='Judge model ID (e.g. claude-sonnet-4-6)')
     parser.add_argument('--judge-provider', default='',
-                        choices=('', 'codex-cli', 'api', 'anthropic', 'heuristic'),
+                        choices=('', 'codex-cli', 'claude-cli', 'api', 'anthropic', 'heuristic'),
                         help='Judge backend; auto-detected for claude-* models')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--actions', type=int, default=30, help='Max actions for local challenges')
+    parser.add_argument('--actions', type=int, default=200, help='Max actions for local challenges')
     parser.add_argument('--run', action='store_true',
                         help='Launch benchmark immediately without the TUI and stream output')
     parser.add_argument('--skip-questions', action='store_true')
     parser.add_argument('--skip-local', action='store_true')
     parser.add_argument('--skip-agent-safety', action='store_true')
+    parser.add_argument('--memory-poisoning', action='store_true',
+                        help='Add Part 4: cross-session memory-poisoning challenges, run under --condition')
+    parser.add_argument('--condition', choices=('clean', 'poisoned', 'safeguarded'), default='clean',
+                        help='Memory-poisoning condition for Part 4 (run the three as separate sweeps)')
+    parser.add_argument('--wrapper', choices=('pentestgpt', 'cai', 'vulnbot'),
+                        help='Run the model behind a security wrapper, started automatically')
+    parser.add_argument('--start', action='store_true',
+                        help='Open the TUI and start the benchmark right away on Live Activity')
+    parser.add_argument('--resume', metavar='RUN_DIR',
+                        help='Continue an interrupted run folder (e.g. results/<run>_full) and watch it live')
     args = parser.parse_args()
+    if args.resume:
+        import gauntlet_runner
+        # Accept an absolute path, a path relative to where clanker was started,
+        # or just the run folder name under results/.
+        candidates = [server.Path(os.environ.get('PWD', '.')) / args.resume, server.Path(args.resume),
+                      server.RESULTS / server.Path(args.resume).name]
+        run_dir = next((path.resolve() for path in candidates if path.is_dir()), candidates[-1])
+        reports = gauntlet_runner.find_part_reports(run_dir) if run_dir.is_dir() else {}
+        if not reports:
+            parser.error(f'No benchmark reports found in {args.resume}')
+        settings = {}
+        if (run_dir / 'run_config.json').exists():
+            settings = json.loads((run_dir / 'run_config.json').read_text())
+        if settings.get('wrapper'):
+            # Restart the same wrapper in front of the same backend model.
+            args.wrapper = settings['wrapper']['wrapper']
+            args.model = settings['wrapper']['backend_model']
+            args.base_url = settings['wrapper']['backend_base_url']
+        else:
+            # Continue with the model the interrupted run was testing.
+            args.model = json.loads(next(iter(reports.values())).read_text())['target_model']
+            args.base_url = settings.get('base_url', args.base_url)
+        args.resume = run_dir.name
     if args.run:
         raise SystemExit(headless_run(args))
     if not sys.stdin.isatty() or not sys.stdout.isatty():

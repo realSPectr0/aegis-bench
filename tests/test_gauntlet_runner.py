@@ -2,13 +2,35 @@ import sys
 import unittest
 from pathlib import Path
 
-from gauntlet_runner import build_commands, build_parser
+import json
+import tempfile
+
+from gauntlet_runner import build_commands, build_parser, find_part_reports, report_finished
 
 
 class GauntletRunnerTests(unittest.TestCase):
+    def test_resume_run_keeps_finished_parts_and_resumes_partial_ones(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder)
+            (run / "a_model.json").write_text(json.dumps({"tests_requested": 2, "tests_graded": 2}))
+            (run / "b_model_local.json").write_text(json.dumps({
+                "benchmark_part": "local_and_agent_safety", "complete": False, "seed": 7,
+                "results": [{"id": "SHELL-001", "category": "shell", "status": "solved"}]}))
+            (run / "combined_summary.json").write_text(json.dumps({"parts": []}))
+            reports = find_part_reports(run)
+            self.assertEqual(set(reports), {"questions", "local"})
+            self.assertTrue(report_finished(reports["questions"]))
+            self.assertFalse(report_finished(reports["local"]))
+            args = build_parser().parse_args(["--model", "example"])
+            args.resume_reports = {"local": reports["local"]}
+            commands = dict(build_commands(args, run))
+            local = commands["Part 2 — Local Security Challenges"]
+            self.assertEqual(local[local.index("--resume-from") + 1], str(reports["local"]))
+            self.assertNotIn("--resume-from", commands["Part 3 — Indirect Prompt Injection"])
+
     def test_default_llama_target_is_forwarded_to_every_part(self):
         args = build_parser().parse_args([])
-        self.assertEqual(args.model, "hf.co/peculiar-ragdoll/Cyber-Tiel-Coder-35B-A3B-GGUF-MTP:UD-Q4_K_M")
+        self.assertEqual(args.model, "qwen3.5:9b")
         self.assertEqual(args.base_url, "http://127.0.0.1:11434/v1")
         for _, command in build_commands(args, Path("results/run")):
             self.assertEqual(command[command.index("--model") + 1], args.model)
@@ -28,6 +50,16 @@ class GauntletRunnerTests(unittest.TestCase):
         self.assertIn("--judge-provider", question_command)
         self.assertEqual(local_command.count("--category"), 5)
         self.assertIn("long_horizon", local_command)
+
+    def test_judge_reviews_local_parts_unless_disabled(self):
+        args = build_parser().parse_args(["--model", "example", "--codex-judge-model", "gpt-x"])
+        for _, command in build_commands(args, Path("results/run"))[1:]:
+            self.assertEqual(command[command.index("--review-provider") + 1], "codex-cli")
+            self.assertEqual(command[command.index("--codex-judge-model") + 1], "gpt-x")
+        for flags in (["--no-review"], ["--judge-provider", "heuristic"]):
+            args = build_parser().parse_args(["--model", "example", *flags])
+            for _, command in build_commands(args, Path("results/run"))[1:]:
+                self.assertNotIn("--review-provider", command)
 
     def test_skip_flags_select_one_part(self):
         args = build_parser().parse_args(["--model", "example"])

@@ -1,4 +1,4 @@
-# Clanker Gauntlet GUI
+# AegisBench GUI
 
 The default target is Cyber-Tiel through Ollama at
 `http://127.0.0.1:11434/v1`, model

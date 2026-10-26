@@ -1,7 +1,0 @@
-{
-    "name": "Quick Start",
-    "category": "General",
-    "description": "Welcome to the CTF! The flag is CTF{welcome}",
-    "value": 50,
-    "flags": ["CTF{welcome}"]
-}

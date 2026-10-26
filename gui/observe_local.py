@@ -13,14 +13,17 @@ def install():
     original_generate = runner.generate_challenge
     original_sandbox = runner.sandbox_command
     original_validate = runner.validate_command
+    original_review = runner.review_challenge
+    original_review_run = runner.review_run
     state = {'id': '', 'sensitive': [], 'source': 'model'}
 
     def event(kind, **fields):
         safe = json.loads(runner.redact_text(json.dumps(fields), state['sensitive']))
         emit(kind, state['id'], **safe)
 
-    def generate(challenge_id, workspace, seed):
-        challenge = original_generate(challenge_id, workspace, seed)
+    def generate(challenge_id, workspace, seed, condition="clean", memory_dir=None):
+        challenge = original_generate(challenge_id, workspace, seed,
+                                      condition=condition, memory_dir=memory_dir)
         state['id'] = challenge_id
         state['sensitive'] = [challenge.expected or '', *challenge.injection_markers]
         event('machine_start', category=challenge.category, goal=challenge.goal,
@@ -56,25 +59,58 @@ def install():
             event('machine_rejected', command=command, text=str(exc))
             raise
 
-    def run(model, challenge_id, seed, max_actions, command_timeout):
+    def run(model, challenge_id, seed, max_actions, command_timeout, **kwargs):
         state.update(id=challenge_id, sensitive=[], source='model')
 
         class ObservedModel:
+            # The runner picks the token budget from this attribute, so the wrapper has
+            # to carry it or a thinking model is silently given the smaller budget.
+            thinking = getattr(model, 'thinking', False)
+            num_ctx = getattr(model, 'num_ctx', None)
+
             def complete(self, messages, **kwargs):
-                event('machine_prompt', text=messages[-1]['content'])
+                if kwargs.get('thinking') is False:
+                    event('machine_forced')
+                else:
+                    event('machine_prompt', text=messages[-1]['content'])
                 response, metadata = model.complete(messages, **kwargs)
                 event('machine_response', text=response)
                 return response, metadata
 
         try:
-            result = original_run(ObservedModel(), challenge_id, seed, max_actions, command_timeout)
+            result = original_run(ObservedModel(), challenge_id, seed, max_actions,
+                                  command_timeout, **kwargs)
         except Exception as exc:
             event('machine_error', text=str(exc))
             raise
         event('machine_done', status=result['status'], solved=result['solved'],
-              actions=result['actions'], safety_score=result.get('agent_safety_score'))
+              actions=result['actions'], safety_score=result.get('agent_safety_score'),
+              give_up_refusals=result.get('give_up_refusals', 0),
+              repeat_nudges=result.get('repeat_nudges', 0))
         return result
 
+    def review(reviewer, result, max_actions=None):
+        emit('review_started', result['id'], solved=result.get('solved'), status=result.get('status'))
+        try:
+            verdict = original_review(reviewer, result, max_actions)
+        except Exception as exc:
+            emit('review_error', result['id'], text=str(exc))
+            raise
+        emit('review_done', result['id'], review=verdict)
+        return verdict
+
+    def review_whole_run(reviewer, results):
+        emit('run_review_started', 'RUN', tasks=len(results))
+        try:
+            verdict = original_review_run(reviewer, results)
+        except Exception as exc:
+            emit('review_error', 'RUN', text=str(exc))
+            raise
+        emit('run_review_done', 'RUN', review=verdict)
+        return verdict
+
+    runner.review_challenge = review
+    runner.review_run = review_whole_run
     runner.generate_challenge = generate
     runner.sandbox_command = sandbox
     runner.validate_command = validate
