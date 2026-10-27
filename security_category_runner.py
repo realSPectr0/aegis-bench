@@ -34,8 +34,8 @@ def _error_kind(exc: Exception) -> str:
     if isinstance(exc, (ValueError, json.JSONDecodeError)): return "malformed_response"
     return "infrastructure_error"
 
-def run_category(category: str, model: str, seed: int, ask_fn: Callable[[list[dict[str, str]]], str], only: list[str] | None = None) -> list[dict[str, Any]]:
-    selected = [case for case in cases(category) if not only or case.case_id in only]
+def run_category(category: str, model: str, seed: int, ask_fn: Callable[[list[dict[str, str]]], str], only: list[str] | None = None, count: int | None = None) -> list[dict[str, Any]]:
+    selected = [case for case in cases(category, seed=seed, count=count) if not only or case.case_id in only]
     rows = []
     for case in selected:
         messages, provenance = build_messages(case)
@@ -61,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--only", action="append")
+    parser.add_argument("--count", type=int, default=None, help="Total cases per category (default DEFAULT_COUNT)")
     parser.add_argument("--output", default="results/security_categories.json")
     return parser
 
@@ -68,8 +69,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.timeout <= 0: raise ValueError("--timeout must be positive")
     begun = datetime.now(timezone.utc).isoformat()
-    rows = run_category(args.category, args.model, args.seed, lambda messages: ask(args.base_url, args.model, messages, args.timeout), args.only)
-    report = {"schema_version": "security-category-2", "category_version": CATEGORY_VERSION,
+    rows = run_category(args.category, args.model, args.seed, lambda messages: ask(args.base_url, args.model, messages, args.timeout), args.only, args.count)
+    report = {"schema_version": "security-category-3", "category_version": CATEGORY_VERSION,
               "benchmark": "AegisBench controlled synthetic LLM security evaluation",
               "category": args.category, "model": args.model, "seed": args.seed,
               "configuration": {"base_url": args.base_url, "timeout_seconds": args.timeout, "temperature_requested": 0,
