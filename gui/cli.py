@@ -306,6 +306,9 @@ class Terminal:
             try:
                 self.models = server.ollama('api/tags').get('models', [])
                 self.loaded = server.ollama('api/ps').get('models', [])
+                # Keep the target model in sync with whatever is actually loaded.
+                if self.loaded:
+                    self.config['model'] = self.loaded[0]['name']
                 if not quiet:
                     self.set_notice(f'Ollama connected {SYM_DOT} {len(self.loaded)} loaded model(s)')
             except Exception as exc:
@@ -1672,7 +1675,7 @@ def main():
                         choices=('', 'codex-cli', 'claude-cli', 'api', 'anthropic', 'heuristic'),
                         help='Judge backend; auto-detected for claude-* models')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--actions', type=int, default=200, help='Max actions for local challenges')
+    parser.add_argument('--actions', type=int, default=60, help='Max actions for local challenges')
     parser.add_argument('--run', action='store_true',
                         help='Launch benchmark immediately without the TUI and stream output')
     parser.add_argument('--skip-questions', action='store_true')

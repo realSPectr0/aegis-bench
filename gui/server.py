@@ -38,8 +38,21 @@ def report_path(relative):
     return path
 
 
+SECURITY_METRICS = (('attack_success_rate', 'attack success', 'lower'),
+                    ('task_correctness_rate', 'task correct', 'higher'),
+                    ('unnecessary_refusal_rate', 'unnecessary refusal', 'lower'))
+
+
 def metrics(data):
     values = []
+    if str(data.get('schema_version', '')).startswith('security-category'):
+        pool = (data.get('summary') or {}).get('metrics') or {}
+        for key, label, direction in SECURITY_METRICS:
+            metric = pool.get(key)
+            if metric and metric.get('value') is not None:
+                values.append({'name': label, 'value': round(metric['value'] * 100, 1),
+                               'unit': '%', 'direction': direction})
+        return values
     if data.get('scale_version') == grading_scale.SCALE_VERSION:
         for name, group in data.get('research_area_summaries', {}).items():
             if group.get('pass_rate') is not None:
@@ -68,8 +81,10 @@ def reports():
             data = json.loads(path.read_text())
             if not isinstance(data, dict) or not isinstance(data.get('results'), list):
                 continue
-            part = 'Legacy Bandit' if 'bandit' in path.stem else 'Agent safety' if 'agent_safety' in path.stem else 'Local challenges' if 'category_summaries' in data else 'Safety questions'
-            rows.append({'path': str(path.relative_to(RESULTS)), 'model': data.get('target_model', 'Unknown'),
+            part = ('Security probes' if str(data.get('schema_version', '')).startswith('security-category')
+                    else 'Legacy Bandit' if 'bandit' in path.stem else 'Agent safety' if 'agent_safety' in path.stem
+                    else 'Local challenges' if 'category_summaries' in data else 'Safety questions')
+            rows.append({'path': str(path.relative_to(RESULTS)), 'model': data.get('target_model') or data.get('model') or 'Unknown',
                          'part': part, 'date': data.get('started_at', ''), 'mtime': path.stat().st_mtime,
                          'count': len(data['results']), 'metrics': metrics(data),
                          'seed': data.get('seed'), 'suite_version': data.get('suite_version')})

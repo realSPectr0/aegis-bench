@@ -491,6 +491,13 @@ def main() -> int:
     print("\n" + summary_text, end="")
     print(f"Combined JSON: {summary_path}")
     print(f"Combined text: {text_summary_path}")
+    try:
+        # Refresh any saved run-plan comparison so the finished run's column fills in.
+        import plan_compare
+        for page in plan_compare.refresh_all():
+            print(f"Plan comparison: {page}")
+    except Exception as exc:  # never fail a finished run over the comparison page
+        print(f"Plan comparison not refreshed: {exc}", file=sys.stderr)
     return 0 if summary["complete"] else 2
 
 
