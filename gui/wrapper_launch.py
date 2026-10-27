@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-WRAPPERS = ('pentestgpt', 'cai', 'vulnbot')
+WRAPPERS = ('pentestgpt', 'cai', 'vulnbot', 'aegisagent')
 
 
 def public_name(wrapper, backend_model):

@@ -244,6 +244,49 @@ class VulnBotWrapper:
         return str(response.json()["choices"][0]["message"].get("content") or "")
 
 
+@dataclass
+class AegisAgentWrapper:
+    """Our own pentest-agent framework (RAG + planner + context management) in front of the
+    backend model. See agent_framework.py; this class only supplies the HTTP backend call."""
+
+    backend_model: str
+    backend_base_url: str
+    thinking: bool | str = "high"
+    use_rag: bool = True
+    use_planner: bool = True
+    timeout: float = 600.0
+
+    def __post_init__(self) -> None:
+        import agent_framework
+
+        base = self.backend_base_url.rstrip("/")
+        self.chat_url = (base[:-3] if base.endswith("/v1") else base) + "/api/chat"
+        config = agent_framework.AgentConfig(use_rag=self.use_rag, use_planner=self.use_planner,
+                                             thinking=self.thinking)
+        self.framework = agent_framework.AgentFramework(self._backend, config)
+
+    def _backend(self, messages: list[dict[str, Any]], *, think: bool | str = False,
+                 max_tokens: int = 1200) -> str:
+        payload = {"model": self.backend_model, "messages": messages, "stream": False,
+                   "think": think, "options": {"temperature": 0, "num_predict": max_tokens}}
+        try:
+            response = requests.post(self.chat_url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+        except Exception:
+            if not think:
+                raise
+            payload["think"] = False
+            response = requests.post(self.chat_url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+        message = response.json().get("message", {})
+        content = message.get("content") or ""
+        reasoning = message.get("thinking") or message.get("thinking_content") or ""
+        return f"<think>{reasoning}</think>\n{content}" if reasoning else content
+
+    def complete(self, messages: list[dict[str, Any]]) -> str:
+        return self.framework.complete(messages)
+
+
 class WrapperHandler(BaseHTTPRequestHandler):
     server: "WrapperHTTPServer"
 
@@ -295,7 +338,7 @@ class WrapperHTTPServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         handler_class: type[BaseHTTPRequestHandler],
         *,
-        wrapper: PentestGPTWrapper | CAIWrapper,
+        wrapper: Any,
         wrapper_name: str,
         public_model_name: str,
         verbose: bool,
@@ -309,7 +352,10 @@ class WrapperHTTPServer(ThreadingHTTPServer):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--wrapper", choices=("pentestgpt", "cai", "vulnbot"), default="pentestgpt")
+    parser.add_argument("--wrapper", choices=("pentestgpt", "cai", "vulnbot", "aegisagent"), default="pentestgpt")
+    parser.add_argument("--thinking", default="high", help="Executor reasoning for aegisagent (high|low|true|false)")
+    parser.add_argument("--no-rag", action="store_true", help="aegisagent: disable retrieval")
+    parser.add_argument("--no-planner", action="store_true", help="aegisagent: disable the planner")
     parser.add_argument("--backend-model", required=True, help="Ollama model, e.g. qwen3:4b-instruct")
     parser.add_argument("--backend-base-url", default="http://localhost:11434/v1")
     parser.add_argument("--host", default="127.0.0.1")
@@ -326,7 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     public_model = args.model_name or f"{args.wrapper}-{args.backend_model}"
-    wrapper: PentestGPTWrapper | CAIWrapper | VulnBotWrapper
+    wrapper: PentestGPTWrapper | CAIWrapper | VulnBotWrapper | AegisAgentWrapper
     if args.wrapper == "pentestgpt":
         wrapper = PentestGPTWrapper(
             backend_model=args.backend_model,
@@ -338,6 +384,17 @@ def main() -> int:
             backend_model=args.backend_model,
             backend_base_url=args.backend_base_url,
             vulnbot_path=Path(args.vulnbot_path) if args.vulnbot_path else None,
+        )
+    elif args.wrapper == "aegisagent":
+        think = args.thinking
+        if isinstance(think, str) and think.lower() in ("true", "false"):
+            think = think.lower() == "true"
+        wrapper = AegisAgentWrapper(
+            backend_model=args.backend_model,
+            backend_base_url=args.backend_base_url,
+            thinking=think,
+            use_rag=not args.no_rag,
+            use_planner=not args.no_planner,
         )
     else:
         wrapper = CAIWrapper(

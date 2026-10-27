@@ -166,7 +166,7 @@ def launch(config):
             command += ['--security-category', category]
     wrapper = config.get('wrapper') or None
     if wrapper:
-        if wrapper not in ('pentestgpt', 'cai', 'vulnbot'):
+        if wrapper not in ('pentestgpt', 'cai', 'vulnbot', 'aegisagent'):
             raise ValueError('Unknown wrapper')
         # run_observed starts the wrapper in front of the model at `endpoint`.
         command += ['--wrapper', wrapper]

@@ -59,6 +59,7 @@ STACKS = {
     'PentestGPT': 'pentestgpt',
     'CAI adapter': 'cai',
     'VulnBot': 'vulnbot',
+    'AegisAgent': 'aegisagent',
 }
 SECURITY_PARTS = ['rag-security', 'prompt-injection', 'prompt-obfuscation', 'system-prompt-extraction']
 # The primary TUI selection contains the core benchmark plus independent security categories.
@@ -1442,7 +1443,8 @@ class ControlPanel(Terminal):
                 self.config['model'] = name
         elif self.cursor == 1:
             current = {'Ollama': 'Off (direct Ollama)'}.get(self.stack, self.stack)
-            choice = self.pick('Inference Backend', ['Off (direct Ollama)', 'PentestGPT', 'CAI adapter', 'VulnBot'], current)
+            options = ['Off (direct Ollama)'] + [name for name in STACKS if name != 'Ollama']
+            choice = self.pick('Inference Backend', options, current)
             if choice:
                 choice = {'Off (direct Ollama)': 'Ollama'}.get(choice, choice)
                 self.stack = choice
@@ -1733,7 +1735,7 @@ def main():
                         help='Add Part 4: cross-session memory-poisoning challenges, run under --condition')
     parser.add_argument('--condition', choices=('clean', 'poisoned', 'safeguarded'), default='clean',
                         help='Memory-poisoning condition for Part 4 (run the three as separate sweeps)')
-    parser.add_argument('--wrapper', choices=('pentestgpt', 'cai', 'vulnbot'),
+    parser.add_argument('--wrapper', choices=('pentestgpt', 'cai', 'vulnbot', 'aegisagent'),
                         help='Run the model behind a security wrapper, started automatically')
     parser.add_argument('--start', action='store_true',
                         help='Open the TUI and start the benchmark right away on Live Activity')

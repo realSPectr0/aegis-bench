@@ -1,6 +1,6 @@
 """Use the existing full runner with an observed Part 1 child process.
 
-With `--wrapper pentestgpt|cai`, `--model` and `--base-url` name the Ollama backend:
+With `--wrapper pentestgpt|cai|vulnbot|aegisagent`, `--model` and `--base-url` name the Ollama backend:
 the wrapper is started in front of it for the run and stopped afterwards.
 """
 import json
