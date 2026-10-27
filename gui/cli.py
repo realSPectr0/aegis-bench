@@ -19,6 +19,7 @@ import report_model
 
 sys.path.insert(0, str(server.ROOT))
 import local_challenge_runner
+import security_categories
 
 
 _OVERVIEW_CACHE = []
@@ -36,11 +37,16 @@ def benchmark_overview():
     local_labels = [('shell', 'shell'), ('forensics', 'forensics'), ('secure_code', 'secure code'),
                     ('web_security', 'web security'), ('long_horizon', 'incident response')]
     local = [(label, len(local_challenge_runner.challenge_ids([category]))) for category, label in local_labels]
-    agent = [('prompt injection', len(local_challenge_runner.challenge_ids(['agent_safety'])))]
+    agent = [('indirect injection', len(local_challenge_runner.challenge_ids(['agent_safety'])))]
+    memory = [('poisoned memory (opt-in)', len(local_challenge_runner.challenge_ids(['memory_poisoning'])))]
     part1 = [(name.replace('_', ' '), count) for name, count in subparts.items()]
-    security = [('RAG security', 3), ('prompt injection', 3), ('prompt obfuscation', 4),
-                ('system-prompt extraction', 1)]
-    parts = [('Part 1: Safety', part1), ('Part 2: Local', local), ('LLM security categories', security)]
+    security = [(label, len(security_categories.cases(category))) for category, label in (
+        ('rag_security', 'RAG security'), ('prompt_injection', 'prompt injection'),
+        ('prompt_obfuscation', 'prompt obfuscation'), ('system_prompt_extraction', 'system-prompt extraction'))]
+    parts = [('Part 1: Safety', part1),
+             (f'Part 2: Local (suite v{local_challenge_runner.LOCAL_SUITE_VERSION})', local),
+             ('Part 3: Agent safety', agent), ('Part 4: Memory poisoning', memory),
+             ('LLM security categories', security)]
     total = sum(count for _, items in parts for _, count in items)
     _OVERVIEW_CACHE.append((total, parts))
     return total, parts
@@ -1177,7 +1183,7 @@ class ControlPanel(Terminal):
             prefix = f'{SYM_ARROW} ' if sel else '  '
             text = f'{prefix}{group["model"][:23]:<24} {group["date"][:10]}  {saved[:28]:<30} {top_metric}'
             self.selected_row(header_y + 2 + i, 3, text, w - 7, sel)
-        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDFs  r: refresh', C_DIM)
+        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDFs  c: plan comparison  r: refresh', C_DIM)
 
     def score_color(self, score, direction='lower'):
         """Return color for a score. For 'lower is better' (harmful compliance), low=green high=red."""
@@ -1229,7 +1235,7 @@ class ControlPanel(Terminal):
         if len(lines) > size:
             pct = int(100 * min(1, (self.detail_offset + size) / len(lines)))
             self.put(4, w - 10, f' {pct:>3}% ', C_DIM)
-        nav = 'e: export PDFs  n/N: next/prev case  1-3: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
+        nav = 'e: export PDFs  n/N: next/prev case  1-4: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
         self.put(h - 4, 3, nav[:w - 7], C_DIM)
 
     def case_color(self, case):
@@ -1308,6 +1314,8 @@ class ControlPanel(Terminal):
                         add('error', f'Error: {case["error"]}', 4, 3)
                     if case['kind'] == 'question':
                         self.question_lines(case, add)
+                    elif case['kind'] == 'security':
+                        self.security_lines(case, add)
                     else:
                         self.challenge_lines(case, add)
                     lines.append({'kind': 'text', 'text': ''})
@@ -1340,6 +1348,21 @@ class ControlPanel(Terminal):
                 add('text', judge['safety_behavior'], 6, 2)
             add('thinking', judge['rationale'], 6, 4)
 
+    def security_lines(self, case, add):
+        probe = case['security']
+        kind = (probe.get('attack_type') or 'probe').replace('_', ' ')
+        add('label', f'Objective  ({kind}, {report_model.seconds(case["total_seconds"])})', 4)
+        add('text', case['goal'] or 'n/a', 6, 2)
+        add('label', 'Attacker prompt', 4)
+        add('text', probe.get('prompt') or 'n/a', 6, 4)
+        add('label', 'Model output', 4)
+        add('text', probe.get('output') or 'No output recorded.', 6, 5)
+        flags = [f'{label} {"yes" if probe.get(key) else "no"}' for key, label in (
+            ('attack_success', 'attack succeeded'), ('task_correct', 'task correct'), ('refusal', 'refused'),
+            ('protected_value_disclosed', 'leaked protected value')) if probe.get(key) is not None]
+        add('label', f'Outcome: {case["result"]} ({str(probe.get("normalized_outcome") or "n/a").replace("_", " ")})', 4)
+        add('muted', f' {SYM_DOT} '.join(flags), 6, 2)
+
     def challenge_lines(self, case, add):
         add('label', 'Goal', 4)
         add('text', case['goal'], 6, 3)
@@ -1360,6 +1383,28 @@ class ControlPanel(Terminal):
             add('label', 'Judge review', 4)
             for line in report_model.review_lines(case['review']):
                 add('thinking', line, 6 + 2 * line.startswith('  '))
+
+    def open_comparison(self):
+        """Refresh the saved run-plan comparisons and open the selected model's page."""
+        import subprocess
+        import plan_compare
+        try:
+            pages = plan_compare.refresh_all()
+        except Exception as exc:
+            self.set_notice(f'Plan comparison failed: {type(exc).__name__}: {exc}', 'error')
+            return
+        if not pages:
+            self.set_notice('No run plan saved yet. Run: python plan_compare.py --model <tag> --abliterated <tag>', 'warn')
+            return
+        model = self.filtered_groups[self.cursor]['model'] if self.filtered_groups else ''
+        folder = re.sub(r'[^A-Za-z0-9._-]+', '_', model)
+        page = next((page for page in pages if page.parent.name == folder), pages[0])
+        try:
+            subprocess.Popen(['xdg-open', str(page)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            self.set_notice(f'Opened plan comparison: {page.relative_to(server.ROOT)}')
+        except OSError as exc:
+            self.set_notice(f'Could not open {page}: {exc}', 'error')
 
     def export_pdf(self, group):
         """Render the run to PDF on a worker thread so the UI stays responsive."""
@@ -1500,7 +1545,7 @@ class ControlPanel(Terminal):
                     elif self.tab != -1:
                         self.tab = -1
                         self.cursor = 0
-                elif self.page_detail and key in ('0', '1', '2', '3'):
+                elif self.page_detail and key in ('0', '1', '2', '3', '4'):
                     self.detail_offset = 0 if key == '0' else self.part_offsets.get(key, 0)
                 elif self.page_detail and key in ('n', 'N'):
                     if key == 'n':
@@ -1509,6 +1554,8 @@ class ControlPanel(Terminal):
                         target = next((o for o in reversed(self.case_offsets) if o < self.detail_offset), None)
                     if target is not None:
                         self.detail_offset = target
+                elif key == 'c' and self.tab == 1:
+                    self.open_comparison()
                 elif key == 'e' and self.tab == 1 and (self.page_detail or self.filtered_groups):
                     self.export_pdf(self.detail_group if self.page_detail else self.filtered_groups[self.cursor])
                 elif key == '\t' and self.tab == 0:
