@@ -50,6 +50,14 @@ ROWS = (
 )
 PANELS = ("local", "harmful", "probe_asr", "mp_attack")
 
+# Local challenges dropped from every run's capability score: no configuration solved them
+# across the post-2026-10-16 runs (floor effect, zero discriminating information). Each was
+# checked to be solvable with a reference fix, so these are hard items, not broken ones.
+EXCLUDED = ("SCODE-001", "WEB-002", "WEB-004")
+EXCLUSION_NOTE = (f"Excluded from local capability in every run: {', '.join(EXCLUDED)}. No configuration "
+                  "has solved them since 2026-10-16 (floor effect), so they cannot separate runs; each was "
+                  "verified solvable with a reference fix.")
+
 
 def _load(path: Path) -> Any:
     try:
@@ -123,7 +131,7 @@ def metrics(run_dir: Path) -> dict[str, tuple[int, int]]:
     if attacks:
         out["probe_asr"] = (succeeded, attacks)
     if parts.get("local"):
-        cases = parts["local"]
+        cases = [case for case in parts["local"] if case.get("id") not in EXCLUDED]
         out["local"] = (sum(case.get("status") == "solved" for case in cases), len(cases))
     if parts.get("agent_safety"):
         cases = parts["agent_safety"]
@@ -156,7 +164,7 @@ def cell(column: dict[str, Any], key: str) -> str:
 def render_markdown(model: str, columns: list[dict[str, Any]]) -> str:
     lines = [f"# Run plan comparison: {model}", "",
              f"Generated {datetime.now():%Y-%m-%d %H:%M}. *pending* = run not found yet; "
-             "*n/a* = the run did not measure it.", "",
+             "*n/a* = the run did not measure it.", "", EXCLUSION_NOTE, "",
              "| Metric | Better | " + " | ".join(column["label"] for column in columns) + " |",
              "|---|---|" + "---|" * len(columns)]
     for key, label, better, _group in ROWS:
@@ -256,6 +264,7 @@ th {{ color:var(--text-secondary); font-weight:600; }} td.state {{ color:var(--t
 <p class="sub">Generated {generated}. Dashed slots are <i>pending</i> (run not found yet) or <i>n/a</i>
 (the run did not measure it). The n under each bar is the sample size; with n this small a one-case
 difference moves the bar a lot.</p>
+<p class="sub">{exclusion}</p>
 <div class="grid4">{panels}</div>
 <div class="wrap"><table><thead><tr><th>Metric</th><th>Better</th>{heads}</tr></thead><tbody>{rows}</tbody></table></div>
 <p class="note">Runs: {runs}</p>
@@ -295,7 +304,8 @@ def render_html(model: str, columns: list[dict[str, Any]]) -> str:
     runs = "; ".join(f"{html.escape(column['label'])}: {html.escape(column['run'].name) if column['run'] else PENDING}"
                      for column in columns)
     return PAGE.format(model=html.escape(model), generated=f"{datetime.now():%Y-%m-%d %H:%M}",
-                       panels=panels, heads=heads, rows="".join(rows), runs=runs)
+                       panels=panels, heads=heads, rows="".join(rows), runs=runs,
+                       exclusion=html.escape(EXCLUSION_NOTE))
 
 
 def load_plans() -> list[dict[str, Any]]:

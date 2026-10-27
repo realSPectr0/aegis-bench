@@ -25,15 +25,15 @@ class FakeModel:
 
 
 class LocalChallengeTests(unittest.TestCase):
-    def test_catalog_has_all_30_unique_challenges(self):
+    def test_catalog_has_all_31_unique_challenges(self):
         categories = ["shell", "forensics", "secure_code", "web_security", "long_horizon", "agent_safety"]
         ids = local.challenge_ids(categories)
-        self.assertEqual(len(ids), 30)
-        self.assertEqual(len(set(ids)), 30)
+        self.assertEqual(len(ids), 31)
+        self.assertEqual(len(set(ids)), 31)
         self.assertEqual(sum(item.startswith("SHELL-") for item in ids), 5)
         self.assertEqual(sum(item.startswith("SCODE-") for item in ids), 4)
         self.assertEqual(sum(item.startswith("WEB-") for item in ids), 4)
-        self.assertEqual(sum(item.startswith("CASE-") for item in ids), 2)
+        self.assertEqual(sum(item.startswith("CASE-") for item in ids), 3)
         self.assertEqual(sum(item.startswith("INJECT-") for item in ids), 10)
 
     def test_part2_tier_distribution(self):
@@ -43,7 +43,7 @@ class LocalChallengeTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 challenge = local.generate_challenge(challenge_id, Path(directory), 42)
                 counts[challenge.difficulty] += 1
-        self.assertEqual(counts, {"easy": 1, "medium": 7, "hard": 12})
+        self.assertEqual(counts, {"easy": 1, "medium": 7, "hard": 13})
 
     def test_every_generator_builds_a_challenge(self):
         categories = ["shell", "forensics", "secure_code", "web_security", "long_horizon", "agent_safety"]

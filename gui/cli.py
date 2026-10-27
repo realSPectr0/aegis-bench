@@ -123,10 +123,10 @@ class Terminal:
         self.tab = -1
         self.cursor = 0
         self.config = {'model': args.model, 'endpoint': args.base_url, 'judge': args.judge,
-                       'judge_provider': '', 'seed': args.seed, 'actions': args.actions, 'parts': PARTS.copy(),
-                       # Memory-poisoning condition, forwarded to server.launch. The curses
-                       # form does not yet expose a picker (its parts grid is fixed geometry);
-                       # Part 4 and condition are selectable from the web GUI and the CLI flags.
+                       'judge_provider': '', 'seed': args.seed, 'actions': args.actions,
+                       'parts': PARTS + [MEMORY_PART] if getattr(args, 'memory_poisoning', False) else PARTS.copy(),
+                       # Memory-poisoning condition, forwarded to server.launch; the Evaluation
+                       # Matrix row cycles it, and --memory-poisoning/--condition preset it.
                        'condition': getattr(args, 'condition', 'clean'),
                        'wrapper': getattr(args, 'wrapper', None)}
         self.stack = next((name for name, key in STACKS.items() if key == self.config['wrapper']), 'Ollama')
