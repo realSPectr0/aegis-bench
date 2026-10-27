@@ -255,6 +255,8 @@ def main() -> int:
     rows = run_escalation(base, args.model, objectives, out_dir / "memory", args.seed,
                           abliterated_model=abl, abliterated_label=args.abliterated_model or "abliterated")
     esc = escalation(rows)
+    esc["run"] = {"model": args.model, "abliterated_model": args.abliterated_model,
+                  "seed": args.seed, "trials": args.trials, "stamp": stamp}
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{stamp}_rows.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     (out_dir / f"{stamp}_escalation.json").write_text(json.dumps(esc, indent=2), encoding="utf-8")
