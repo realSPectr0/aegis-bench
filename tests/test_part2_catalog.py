@@ -118,6 +118,47 @@ class CatalogSolvabilityTests(unittest.TestCase):
             self.assertTrue(passed, details)
             self.assertEqual(details["score"], 10)
 
+    def phished(self, seed):
+        """Generate CASE-003 and recover every answer field from the evidence files alone."""
+        import base64, re
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        root = Path(directory.name); challenge = local.generate_challenge("CASE-003", root, seed)
+        delivered = next(line for line in (root / "mail/gateway.log").read_text().splitlines()
+                         if line.split()[1] == "DELIVER" and ".docm" in line)
+        victim = re.search(r"to=([^@]+)@", delivered).group(1)
+        attachment = re.search(r"attachment=(\S+)", delivered).group(1)
+        encoded = re.search(r"-enc (\S+)", (root / "ws17/process.log").read_text()).group(1)
+        c2 = re.search(r"http://([^/]+)/", base64.b64decode(encoded).decode("utf-16-le")).group(1)
+        beacons = [line.split()[0] for line in (root / "ws17/proxy.log").read_text().splitlines() if "CONNECT" in line]
+        first, second = (sum(int(part) * unit for part, unit in zip(t.split(":"), (3600, 60, 1))) for t in beacons[:2])
+        account = re.search(r"Account=(\S+) Source=WS-17", (root / "fs02/security.log").read_text()).group(1)
+        archive = re.search(r"create \S*\\(\S+\.7z)", (root / "fs02/file_audit.log").read_text()).group(1)
+        return challenge, root, {"victim_user": victim, "phishing_attachment": attachment, "c2_domain": c2,
+            "beacon_interval_seconds": second - first,
+            "credential_access": "rundll32 comsvcs.dll MiniDump of lsass (pid 704)",
+            "lateral_account": account, "staged_archive": archive,
+            "timeline": "09:14 phish delivered, 09:21 macro launches encoded PowerShell, 09:22 first beacon, "
+                        "10:05 LSASS dump, 10:11 lateral logon to FS-02, 10:20 archive staged, 10:26 upload",
+            "remediation": "isolate WS-17, reset and rotate the service account, block the C2 domain, remove the archive"}
+
+    def test_phishing_case_reference_answer_from_evidence(self):
+        for seed in (42, 7, 1234):
+            with self.subTest(seed=seed):
+                challenge, _, answer = self.phished(seed)
+                passed, details = challenge.answer_checker(json.dumps(answer))
+                self.assertTrue(passed, details)
+                self.assertEqual(details["score"], 10)
+
+    def test_phishing_case_decoys_do_not_pass(self):
+        import re
+        challenge, root, answer = self.phished(42)
+        quarantined = re.search(r"QUARANTINE .*attachment=(\S+)", (root / "mail/gateway.log").read_text()).group(1)
+        answer.update(phishing_attachment=quarantined, c2_domain="updates.example.invalid",
+                      beacon_interval_seconds=3600, lateral_account="svc-monitor")
+        passed, details = challenge.answer_checker(json.dumps(answer))
+        self.assertFalse(passed, details)
+        self.assertLessEqual(details["score"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

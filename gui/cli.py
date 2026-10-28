@@ -19,6 +19,7 @@ import report_model
 
 sys.path.insert(0, str(server.ROOT))
 import local_challenge_runner
+import security_categories
 
 
 _OVERVIEW_CACHE = []
@@ -36,9 +37,16 @@ def benchmark_overview():
     local_labels = [('shell', 'shell'), ('forensics', 'forensics'), ('secure_code', 'secure code'),
                     ('web_security', 'web security'), ('long_horizon', 'incident response')]
     local = [(label, len(local_challenge_runner.challenge_ids([category]))) for category, label in local_labels]
-    agent = [('prompt injection', len(local_challenge_runner.challenge_ids(['agent_safety'])))]
+    agent = [('indirect injection', len(local_challenge_runner.challenge_ids(['agent_safety'])))]
+    memory = [('poisoned memory (opt-in)', len(local_challenge_runner.challenge_ids(['memory_poisoning'])))]
     part1 = [(name.replace('_', ' '), count) for name, count in subparts.items()]
-    parts = [('Part 1: Safety', part1), ('Part 2: Local', local), ('Part 3: Agent', agent)]
+    security = [(label, len(security_categories.cases(category))) for category, label in (
+        ('rag_security', 'RAG security'), ('prompt_injection', 'prompt injection'),
+        ('prompt_obfuscation', 'prompt obfuscation'), ('system_prompt_extraction', 'system-prompt extraction'))]
+    parts = [('Part 1: Safety', part1),
+             (f'Part 2: Local (suite v{local_challenge_runner.LOCAL_SUITE_VERSION})', local),
+             ('Part 3: Agent safety', agent), ('Part 4: Memory poisoning', memory),
+             ('LLM security categories', security)]
     total = sum(count for _, items in parts for _, count in items)
     _OVERVIEW_CACHE.append((total, parts))
     return total, parts
@@ -51,8 +59,21 @@ STACKS = {
     'PentestGPT': 'pentestgpt',
     'CAI adapter': 'cai',
     'VulnBot': 'vulnbot',
+    'AegisAgent': 'aegisagent',
 }
-PARTS = ['questions', 'local', 'agent-safety']
+SECURITY_PARTS = ['rag-security', 'prompt-injection', 'prompt-obfuscation', 'system-prompt-extraction']
+# The primary TUI selection contains the core benchmark plus independent security categories.
+# Memory poisoning remains a separate opt-in experiment.
+PARTS = ['questions', 'local', 'agent-safety'] + SECURITY_PARTS
+ALL_PARTS = PARTS + ['memory-poisoning']
+PART_LABELS = {
+    'questions': 'Safety Questions', 'local': 'Local Challenges', 'agent-safety': 'Legacy Agent Safety',
+    'rag-security': 'RAG Security', 'prompt-injection': 'Prompt Injection',
+    'prompt-obfuscation': 'Prompt Obfuscation', 'system-prompt-extraction': 'System-Prompt Extraction',
+    'memory-poisoning': 'Memory Poisoning',
+}
+MEMORY_PART = 'memory-poisoning'
+CONDITION_CYCLE = [None, 'clean', 'poisoned', 'safeguarded']
 
 # Box-drawing characters
 BD_TL = '\u256d'  # rounded top-left
@@ -109,7 +130,11 @@ class Terminal:
         self.tab = -1
         self.cursor = 0
         self.config = {'model': args.model, 'endpoint': args.base_url, 'judge': args.judge,
-                       'judge_provider': '', 'seed': args.seed, 'actions': args.actions, 'parts': PARTS.copy(),
+                       'judge_provider': '', 'seed': args.seed, 'actions': args.actions,
+                       'parts': PARTS + [MEMORY_PART] if getattr(args, 'memory_poisoning', False) else PARTS.copy(),
+                       # Memory-poisoning condition, forwarded to server.launch; the Evaluation
+                       # Matrix row cycles it, and --memory-poisoning/--condition preset it.
+                       'condition': getattr(args, 'condition', 'clean'),
                        'wrapper': getattr(args, 'wrapper', None)}
         self.stack = next((name for name, key in STACKS.items() if key == self.config['wrapper']), 'Ollama')
         self.rows = server.reports()
@@ -135,31 +160,36 @@ class Terminal:
         curses.start_color()
         curses.use_default_colors()
         if curses.COLORS >= 256:
-            curses.init_pair(C_ACCENT,     73,  -1)    # muted teal
-            curses.init_pair(C_TITLE,      255, -1)    # bright white
-            curses.init_pair(C_WARN,       179, -1)    # warm amber
-            curses.init_pair(C_ERROR,      167, -1)    # soft red
-            curses.init_pair(C_DIM,        243, -1)    # medium gray
-            curses.init_pair(C_SELECT,     16,  73)    # dark on teal
-            curses.init_pair(C_SUCCESS,    108, -1)    # sage green
-            curses.init_pair(C_HEADER_BG,  73,  236)   # teal on dark
-            curses.init_pair(C_TAB_ACT,    16,  73)    # dark on teal
-            curses.init_pair(C_TAB_INACT,  250, 238)   # light on charcoal
-            curses.init_pair(C_FIELD_LBL,  246, -1)    # light gray
-            curses.init_pair(C_FIELD_VAL,  252, -1)    # near white
-            curses.init_pair(C_LOG_KEY,    110, -1)    # soft blue
-            curses.init_pair(C_BORDER_F,   73,  -1)    # teal borders
-            curses.init_pair(C_STATUS_RUN, 114, -1)    # green
-            curses.init_pair(C_STATUS_OK,  108, -1)    # sage
+            # Catppuccin Mocha-inspired 256-color palette. Keeping one warm,
+            # low-contrast base across the UI is much easier on the eyes than
+            # mixing the terminal's unknown background with saturated accents.
+            base, mantle = 234, 233
+            curses.init_pair(C_ACCENT,     183, base)    # mauve
+            curses.init_pair(C_TITLE,      189, base)    # text
+            curses.init_pair(C_WARN,       223, base)    # yellow
+            curses.init_pair(C_ERROR,      211, base)    # red
+            curses.init_pair(C_DIM,        146, base)    # subtext
+            curses.init_pair(C_SELECT,     base, 111)    # base on blue
+            curses.init_pair(C_SUCCESS,    151, base)    # green
+            curses.init_pair(C_HEADER_BG,  183, mantle)  # mauve on mantle
+            curses.init_pair(C_TAB_ACT,    base, 111)    # base on blue
+            curses.init_pair(C_TAB_INACT,  146, mantle)  # subtext on mantle
+            curses.init_pair(C_FIELD_LBL,  147, base)    # lavender
+            curses.init_pair(C_FIELD_VAL,  189, base)    # text
+            curses.init_pair(C_LOG_KEY,    152, base)    # teal
+            curses.init_pair(C_BORDER_F,   111, base)    # blue
+            curses.init_pair(C_STATUS_RUN, 151, mantle)  # green
+            curses.init_pair(C_STATUS_OK,  151, mantle)  # green
+            self.screen.bkgd(' ', curses.color_pair(C_FIELD_VAL))
         else:
-            curses.init_pair(C_ACCENT,     curses.COLOR_CYAN,    -1)
+            curses.init_pair(C_ACCENT,     curses.COLOR_MAGENTA, -1)
             curses.init_pair(C_TITLE,      curses.COLOR_WHITE,   -1)
             curses.init_pair(C_WARN,       curses.COLOR_YELLOW,  -1)
             curses.init_pair(C_ERROR,      curses.COLOR_RED,     -1)
             curses.init_pair(C_DIM,        curses.COLOR_WHITE,   -1)
             curses.init_pair(C_SELECT,     curses.COLOR_BLACK,   curses.COLOR_CYAN)
             curses.init_pair(C_SUCCESS,    curses.COLOR_GREEN,   -1)
-            curses.init_pair(C_HEADER_BG,  curses.COLOR_CYAN,    curses.COLOR_BLACK)
+            curses.init_pair(C_HEADER_BG,  curses.COLOR_WHITE,   curses.COLOR_BLUE)
             curses.init_pair(C_TAB_ACT,    curses.COLOR_BLACK,   curses.COLOR_CYAN)
             curses.init_pair(C_TAB_INACT,  curses.COLOR_WHITE,   curses.COLOR_BLACK)
             curses.init_pair(C_FIELD_LBL,  curses.COLOR_WHITE,   -1)
@@ -207,7 +237,8 @@ class Terminal:
     def draw_header(self, width):
         """Render the top header bar."""
         self.put(0, 0, ' ' * width, C_HEADER_BG)
-        self.put(0, 1, ' Aegis Bench ', C_HEADER_BG, True)
+        self.put(0, 1, ' AEGISBENCH ', C_HEADER_BG, True)
+        self.put(0, 13, 'RESEARCH CONSOLE  /  LLM SECURITY EVALUATION', C_HEADER_BG)
         status = self.active_status()
         if status == 'RUNNING':
             self.spin_frame = (self.spin_frame + 1) % len(SYM_SPINNER)
@@ -282,6 +313,9 @@ class Terminal:
             try:
                 self.models = server.ollama('api/tags').get('models', [])
                 self.loaded = server.ollama('api/ps').get('models', [])
+                # Keep the target model in sync with whatever is actually loaded.
+                if self.loaded:
+                    self.config['model'] = self.loaded[0]['name']
                 if not quiet:
                     self.set_notice(f'Ollama connected {SYM_DOT} {len(self.loaded)} loaded model(s)')
             except Exception as exc:
@@ -488,29 +522,35 @@ class Terminal:
     def draw_models(self, height):
         w = self.screen.getmaxyx()[1]
         self.box(4, 1, height - 8, w - 2, 'Ollama Models')
-        self.put(6, 3, f'  {"MODEL":<32} {"STATUS":<18}', C_DIM, True)
-        self.put(6, w - 30, 'l: load  u: unload  r: refresh', C_DIM)
-        self.hline(7, 3, w - 8)
+        # Name column is truncated with an ellipsis so long HF tags never run into STATUS,
+        # and the keybind hint is right-aligned inside the border rather than overflowing it.
+        name_w = max(24, min(48, w - 40))
+        status_x = 5 + name_w + 2
+        self.put(6, 5, 'MODEL', C_DIM, True)
+        self.put(6, status_x, 'STATUS', C_DIM, True)
+        hint = f'l load {SYM_DOT} u unload {SYM_DOT} r refresh'
+        self.put(6, max(status_x + 8, w - 3 - len(hint)), hint, C_DIM)
+        self.hline(7, 3, w - 6)
         loaded = {model['name']: model for model in self.loaded}
         size = height - 14
         start = max(0, self.cursor - size + 1)
         for y, model in enumerate(self.models[start:start + size], 8):
             index = start + y - 8
             sel = index == self.cursor
-            prefix = f'{SYM_ARROW} ' if sel else '  '
+            prefix = SYM_ARROW if sel else ' '
+            name = model['name']
+            if len(name) > name_w:
+                name = name[:name_w - 1] + '…'
             memory = loaded.get(model['name'])
             if memory:
-                status = f'{SYM_CHECK} Loaded  {memory["size"]/1024**3:.1f} GiB'
-                sc = C_SUCCESS
+                status, sc = f'{SYM_CHECK} Loaded {SYM_DOT} {memory["size"] / 1024 ** 3:.1f} GiB', C_SUCCESS
             else:
-                status = f'{SYM_IDLE} Available'
-                sc = C_DIM
-            text = f'{prefix}{model["name"]:<32} {status}'
+                status, sc = f'{SYM_IDLE} Available', C_DIM
             if sel:
-                self.selected_row(y, 3, text, w - 8, True)
+                self.selected_row(y, 3, f' {prefix} {name:<{name_w}}  {status}', w - 6, True)
             else:
-                self.put(y, 3, f'{prefix}{model["name"]:<32}')
-                self.put(y, 37, status, sc)
+                self.put(y, 3, f' {prefix} {name:<{name_w}}')
+                self.put(y, status_x, status, sc)
         if not self.models:
             self.put(9, 4, 'No models found. Is Ollama running? Press r to retry.', C_DIM)
 
@@ -828,96 +868,108 @@ class ControlPanel(Terminal):
         return lines
 
     def draw_home_page(self, h, w):
-        logo = [
-            '   _   ___ ___ ___ ___ ',
-            '  /_\\ | __/ __|_ _/ __|',
-            ' / _ \\| _| (_ || |\\__ \\',
-            '/_/ \\_\\___\\___|___|___/',
-        ]
-        cx = max(2, (w - 76) // 2)
-        top = 5
-        for i, line in enumerate(logo):
-            self.put(top + i, cx + 1, line, C_ACCENT, True)
-        self.put(top + 4, cx + 1, 'B E N C H', C_TITLE, True)
-        self.put(top + 5, cx + 1, 'LLM Security Benchmark Framework', C_DIM)
+        # A capped-width content column with a comfortable left margin, rather than a narrow
+        # block floating in the middle of a wide terminal.
+        total_w = min(112, w - 8)
+        cx = max(4, (w - total_w) // 2)
+        top = 4
+        # Hero: the header bar already carries the product name, so the body leads with a
+        # single clean wordmark + tagline and one thin accent rule (no heavy double rules).
+        self.put(top, cx, 'AEGISBENCH', C_TITLE, True)
+        self.put(top, cx + 11, 'LLM SECURITY EVALUATION', C_FIELD_LBL)
+        self.put(top + 1, cx, f'Independent {SYM_DOT} auditable {SYM_DOT} local-first evaluation of model security behavior', C_DIM)
+        self.put(top + 2, cx, BD_H * total_w, C_ACCENT)
 
-        # --- Full-width benchmark overview ---
-        card_top = top + 8
-        total_w = min(76, w - cx - 2)
-        left_w = max(30, total_w // 2)
+        # --- Two balanced overview cards ---
+        card_top = top + 4
+        left_w = max(34, (total_w - 2) * 5 // 9)   # give the catalog a little more room
         right_w = total_w - left_w - 2
-        card_h = 20 if h > 44 else min(h - card_top - 10, 15)
+        # Tall enough to show the full catalog, but always leaving room for the menu below.
+        card_h = max(12, min(h - card_top - 11, 22))
+        bottom = card_top + card_h - 1
 
-        # Left card: System Status
-        self.box(card_top, cx, card_h, left_w, 'System Status')
+        def field(y, x, label, value, vcolor=C_FIELD_VAL, width=left_w):
+            self.put(y, x + 3, label, C_FIELD_LBL)
+            self.put(y, x + 16, str(value)[:max(0, width - 19)], vcolor)
+
+        # Left card: environment + current run configuration (so it reads at a glance).
+        self.box(card_top, cx, card_h, left_w, '01  ENVIRONMENT')
         ollama_ok = len(self.models) > 0
-        self.put(card_top + 2, cx + 3, f'{SYM_CHECK if ollama_ok else SYM_CROSS} Ollama',
+        ey = card_top + 2
+        self.put(ey, cx + 3, f'{SYM_CHECK if ollama_ok else SYM_CROSS} Ollama',
                  C_SUCCESS if ollama_ok else C_ERROR)
-        self.put(card_top + 2, cx + 16, f'{len(self.models)} models' if ollama_ok else 'offline', C_DIM)
-
-        loaded_count = len(self.loaded)
-        self.put(card_top + 3, cx + 3, f'{SYM_DOT} VRAM', C_FIELD_LBL)
-        self.put(card_top + 3, cx + 16, f'{loaded_count} loaded', C_DIM)
-        for i, model in enumerate(self.loaded[:3]):
-            if card_top + 4 + i < card_top + card_h - 3:
-                mem = f'{model["size"]/1024**3:.1f}G'
-                self.put(card_top + 4 + i, cx + 5, model['name'][:left_w - 16], C_FIELD_VAL)
-                self.put(card_top + 4 + i, cx + left_w - len(mem) - 3, mem, C_DIM)
-
+        self.put(ey, cx + 16, f'{len(self.models)} models {SYM_DOT} {len(self.loaded)} loaded'
+                 if ollama_ok else 'offline', C_DIM)
+        ey += 1
+        for model in self.loaded[:2]:
+            if ey < bottom - 8:
+                mem = f'{model["size"] / 1024 ** 3:.1f}G'
+                self.put(ey, cx + 5, model['name'][:left_w - 14], C_FIELD_VAL)
+                self.put(ey, cx + left_w - len(mem) - 3, mem, C_DIM)
+                ey += 1
+        self.hline(ey, cx + 2, left_w - 4); ey += 1
+        field(ey, cx, 'Model', self.config['model']); ey += 1
+        field(ey, cx, 'Endpoint', self.config['endpoint']); ey += 1
+        field(ey, cx, 'Wrapper', 'off (direct)' if self.stack == 'Ollama' else self.stack); ey += 1
+        field(ey, cx, 'Seed', self.config['seed']); ey += 1
+        field(ey, cx, 'Max actions', self.config['actions']); ey += 1
+        self.hline(ey, cx + 2, left_w - 4); ey += 1
         status = self.active_status()
-        row_s = min(card_top + 4 + min(loaded_count, 3) + 1, card_top + card_h - 3)
-        self.hline(row_s - 1, cx + 2, left_w - 4)
         sym, sc = {
             'RUNNING': (SYM_RUNNING, C_STATUS_RUN), 'COMPLETE': (SYM_CHECK, C_STATUS_OK),
             'FAILED': (SYM_CROSS, C_ERROR), 'STOPPED': (SYM_DASH, C_WARN),
         }.get(status, (SYM_IDLE, C_DIM))
-        if row_s < card_top + card_h - 1:
-            self.put(row_s, cx + 3, f'{sym} Benchmark {status.lower()}', sc)
-        if self.rows and row_s + 1 < card_top + card_h - 1:
-            self.put(row_s + 1, cx + 3, f'{len(self.rows)} reports saved', C_DIM)
+        if ey < bottom:
+            self.put(ey, cx + 3, f'{sym} Benchmark {status.lower()}', sc)
+            self.put(ey, cx + left_w - len(f'{len(self.rows)} reports') - 3,
+                     f'{len(self.rows)} reports', C_DIM)
 
-        # Right card: What's in the benchmark
+        # Right card: what the benchmark contains, with a "+N more" guard on overflow.
         rx = cx + left_w + 2
         if right_w >= 24:
-            self.box(card_top, rx, card_h, right_w, 'The Benchmark')
+            self.box(card_top, rx, card_h, right_w, '02  TEST CATALOG')
             ry = card_top + 2
             total, parts = benchmark_overview()
-            self.put(ry, rx + 3, f'{total} total test cases', C_FIELD_VAL)
-            ry += 1
-            self.hline(ry, rx + 2, right_w - 4)
-            ry += 1
-
+            self.put(ry, rx + 3, f'{total} total test cases', C_FIELD_VAL); ry += 1
+            self.hline(ry, rx + 2, right_w - 4); ry += 1
+            # Reserve the last interior line for a "+N more" note only when content overflows.
+            needed = sum(1 + len(items) for _, items in parts)
+            limit = bottom - (1 if needed > (bottom - ry) else 0)
+            hidden = 0
             for title, items in parts:
-                if ry >= card_top + card_h - 1:
-                    break
-                self.put(ry, rx + 3, title, C_ACCENT)
-                ry += 1
+                if ry >= limit:
+                    hidden += 1 + len(items)
+                    continue
+                self.put(ry, rx + 3, title, C_ACCENT); ry += 1
                 for label, count in items:
-                    if ry >= card_top + card_h - 1:
-                        break
+                    if ry >= limit:
+                        hidden += 1
+                        continue
                     self.put(ry, rx + 5, label, C_DIM)
                     self.put(ry, rx + right_w - len(str(count)) - 3, str(count), C_FIELD_VAL)
                     ry += 1
+            if hidden:
+                self.put(limit, rx + 5, f'+{hidden} more categories {SYM_DOT} F1', C_WARN)
 
         # Navigation menu
         menu_top = card_top + card_h + 1
         if menu_top + 5 < h - 4:
             items = [
-                ('F1', 'New Benchmark',  'Configure and launch a run'),
-                ('F2', 'View Results',   f'{len(self.rows)} saved reports'),
-                ('F3', 'Model Manager',  'Ollama models and VRAM'),
-                ('F4', 'Live Activity',  'Real-time sandbox output'),
+                ('F1', 'CONFIGURE', 'model, suites and defenses'),
+                ('F2', 'RESULTS',   f'{len(self.rows)} saved reports'),
+                ('F3', 'MODELS',    'Ollama inventory and VRAM'),
+                ('F4', 'ACTIVITY',  'live prompts and sandbox events'),
             ]
             for i, (key, label, hint) in enumerate(items):
                 sel = i == self.cursor
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                text = f'{prefix}[{key}]  {label:<18} {hint}'
+                text = f'{prefix}{key:<4} {label:<13} {hint}'
                 row_w = min(60, w - cx - 2)
                 self.selected_row(menu_top + i, cx, text, row_w, sel)
                 self.hits.append((menu_top + i, cx, 1, row_w, 'home', i))
 
         if menu_top + 7 < h - 4:
-            tagline = f'Local-first {SYM_DOT} Reproducible {SYM_DOT} Research-grade'
+            tagline = f'CONTROLLED {SYM_DOT} REPRODUCIBLE {SYM_DOT} AUDITABLE'
             self.put(menu_top + 6, max(2, (w - len(tagline)) // 2), tagline, C_DIM)
 
     def draw_streams(self, output, judge, machine):
@@ -964,9 +1016,9 @@ class ControlPanel(Terminal):
                 judge_lines += report_model.review_lines(event['review'])
             elif kind == 'review_error':
                 judge_lines += [f'JUDGE ERROR: {event["text"]}']
-        for rect, content, area, label in ((output, lines, 'output', 'Runner Output'),
-                                           (judge, judge_lines, 'judge', 'Judge Exchange'),
-                                           (machine, self.machine_lines(events), 'machine', 'Machine Activity')):
+        for rect, content, area, label in ((output, lines, 'output', '01  RUNNER OUTPUT'),
+                                           (judge, judge_lines, 'judge', '02  JUDGE EXCHANGE'),
+                                           (machine, self.machine_lines(events), 'machine', '03  SANDBOX ACTIVITY')):
             y, x, h, w = rect
             self.frame(y, x, h, w, label, area)
             self.draw_text(content, y + 2, x + 2, max(1, h - 4), w - 4, area)
@@ -1010,7 +1062,7 @@ class ControlPanel(Terminal):
         else:
             # Setup panel
             left = min(52, max(38, w // 3 + 8))
-            self.frame(4, 1, h - 8, left, 'Run Setup', 'setup')
+            self.frame(4, 1, h - 8, left, 'RUN DESIGN', 'setup')
             labels = [
                 ('Model',       self.config['model']),
                 ('Wrapper',     'Off (direct)' if self.stack == 'Ollama' else f'{self.stack} (auto-start)'),
@@ -1023,42 +1075,50 @@ class ControlPanel(Terminal):
                 y = 6 + index
                 sel = self.focus == 'setup' and self.cursor == index
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                text = f'{prefix}{label + ":":<14} {value}'
+                text = f'{prefix}{label.upper():<12}  {value}'
                 self.selected_row(y, 3, text, left - 4, sel)
                 self.hits.append((y, 3, 1, left - 4, 'setup', index))
 
             # Separator
-            self.put(12, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
+            self.put(12, 3, '   EVALUATION MATRIX', C_ACCENT, True)
+            self.put(12, 24, BD_H * max(1, left - 29), C_DIM)
 
             # Part checkboxes
-            part_labels = ['Safety Questions', 'Local Challenges', 'Agent Safety']
-            for i, (part, plabel) in enumerate(zip(PARTS, part_labels)):
+            part_labels = [PART_LABELS[part] for part in ALL_PARTS]
+            for i, (part, plabel) in enumerate(zip(ALL_PARTS, part_labels)):
                 y = 13 + i
                 sel = self.focus == 'setup' and self.cursor == 6 + i
                 enabled = part in self.config['parts']
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                check = SYM_CHECK if enabled else ' '
-                text = f'{prefix}[{check}] Part {i+1}: {plabel}'
+                check = '●' if enabled else '○'
+                # The memory part shows its condition; selecting it cycles off/clean/poisoned/safeguarded.
+                suffix = f' [{self.config["condition"]}]' if part == MEMORY_PART and enabled else ''
+                family = 'CORE' if part in ('questions', 'local') else 'LEGACY' if part == 'agent-safety' else 'EXPERIMENT' if part == MEMORY_PART else 'SECURITY'
+                text = f'{prefix}{check} {family:<10} {plabel}{suffix}'
                 self.selected_row(y, 3, text, left - 4, sel)
                 self.hits.append((y, 3, 1, left - 4, 'setup', 6 + i))
 
             # Separator
-            self.put(16, 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
+            action_start = 6 + len(ALL_PARTS)
+            self.put(13 + len(ALL_PARTS), 3, f'   {BD_H * max(1, left - 8)}', C_DIM)
 
             # Action buttons
             for btn_i, (btn_label, btn_color) in enumerate([
-                (f'{SYM_BLOCK} Start Benchmark', C_SUCCESS),
-                (f'{SYM_CROSS} Stop Benchmark', C_ERROR),
+                (f'{SYM_BLOCK}  RUN SELECTED EVALUATIONS', C_SUCCESS),
+                (f'{SYM_CROSS}  STOP ACTIVE RUN', C_ERROR),
             ]):
-                y = 17 + btn_i
-                idx = 9 + btn_i
+                y = 14 + len(ALL_PARTS) + btn_i
+                idx = action_start + btn_i
                 sel = self.focus == 'setup' and self.cursor == idx
                 prefix = f' {SYM_ARROW} ' if sel else '   '
-                self.selected_row(y, 3, f'{prefix}{btn_label}', left - 4, sel)
+                if sel:
+                    self.selected_row(y, 3, f'{prefix}{btn_label}', left - 4, True)
+                else:
+                    self.put(y, 3, f'{prefix}{btn_label}', btn_color, True)
                 self.hits.append((y, 3, 1, left - 4, 'setup', idx))
 
             # Hint
-            self.put(h - 6, 3, 'Enter: select/edit  Tab: switch pane', C_DIM)
+            self.put(h - 6, 3, 'ENTER toggle/edit  ·  TAB change pane', C_DIM)
 
             # Right side: three stream panels
             right_x, right_w = left + 2, w - left - 3
@@ -1124,7 +1184,7 @@ class ControlPanel(Terminal):
             prefix = f'{SYM_ARROW} ' if sel else '  '
             text = f'{prefix}{group["model"][:23]:<24} {group["date"][:10]}  {saved[:28]:<30} {top_metric}'
             self.selected_row(header_y + 2 + i, 3, text, w - 7, sel)
-        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDFs  r: refresh', C_DIM)
+        self.put(h - 6, 3, f'/: search  Enter: details  e: export PDFs  c: plan comparison  r: refresh', C_DIM)
 
     def score_color(self, score, direction='lower'):
         """Return color for a score. For 'lower is better' (harmful compliance), low=green high=red."""
@@ -1176,7 +1236,7 @@ class ControlPanel(Terminal):
         if len(lines) > size:
             pct = int(100 * min(1, (self.detail_offset + size) / len(lines)))
             self.put(4, w - 10, f' {pct:>3}% ', C_DIM)
-        nav = 'e: export PDFs  n/N: next/prev case  1-3: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
+        nav = 'e: export PDFs  n/N: next/prev case  1-4: jump to part  0: top  j/k PgUp/PgDn: scroll  Esc: back'
         self.put(h - 4, 3, nav[:w - 7], C_DIM)
 
     def case_color(self, case):
@@ -1255,6 +1315,8 @@ class ControlPanel(Terminal):
                         add('error', f'Error: {case["error"]}', 4, 3)
                     if case['kind'] == 'question':
                         self.question_lines(case, add)
+                    elif case['kind'] == 'security':
+                        self.security_lines(case, add)
                     else:
                         self.challenge_lines(case, add)
                     lines.append({'kind': 'text', 'text': ''})
@@ -1287,6 +1349,21 @@ class ControlPanel(Terminal):
                 add('text', judge['safety_behavior'], 6, 2)
             add('thinking', judge['rationale'], 6, 4)
 
+    def security_lines(self, case, add):
+        probe = case['security']
+        kind = (probe.get('attack_type') or 'probe').replace('_', ' ')
+        add('label', f'Objective  ({kind}, {report_model.seconds(case["total_seconds"])})', 4)
+        add('text', case['goal'] or 'n/a', 6, 2)
+        add('label', 'Attacker prompt', 4)
+        add('text', probe.get('prompt') or 'n/a', 6, 4)
+        add('label', 'Model output', 4)
+        add('text', probe.get('output') or 'No output recorded.', 6, 5)
+        flags = [f'{label} {"yes" if probe.get(key) else "no"}' for key, label in (
+            ('attack_success', 'attack succeeded'), ('task_correct', 'task correct'), ('refusal', 'refused'),
+            ('protected_value_disclosed', 'leaked protected value')) if probe.get(key) is not None]
+        add('label', f'Outcome: {case["result"]} ({str(probe.get("normalized_outcome") or "n/a").replace("_", " ")})', 4)
+        add('muted', f' {SYM_DOT} '.join(flags), 6, 2)
+
     def challenge_lines(self, case, add):
         add('label', 'Goal', 4)
         add('text', case['goal'], 6, 3)
@@ -1307,6 +1384,28 @@ class ControlPanel(Terminal):
             add('label', 'Judge review', 4)
             for line in report_model.review_lines(case['review']):
                 add('thinking', line, 6 + 2 * line.startswith('  '))
+
+    def open_comparison(self):
+        """Refresh the saved run-plan comparisons and open the selected model's page."""
+        import subprocess
+        import plan_compare
+        try:
+            pages = plan_compare.refresh_all()
+        except Exception as exc:
+            self.set_notice(f'Plan comparison failed: {type(exc).__name__}: {exc}', 'error')
+            return
+        if not pages:
+            self.set_notice('No run plan saved yet. Run: python plan_compare.py --model <tag> --abliterated <tag>', 'warn')
+            return
+        model = self.filtered_groups[self.cursor]['model'] if self.filtered_groups else ''
+        folder = re.sub(r'[^A-Za-z0-9._-]+', '_', model)
+        page = next((page for page in pages if page.parent.name == folder), pages[0])
+        try:
+            subprocess.Popen(['xdg-open', str(page)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            self.set_notice(f'Opened plan comparison: {page.relative_to(server.ROOT)}')
+        except OSError as exc:
+            self.set_notice(f'Could not open {page}: {exc}', 'error')
 
     def export_pdf(self, group):
         """Render the run to PDF on a worker thread so the UI stays responsive."""
@@ -1344,7 +1443,8 @@ class ControlPanel(Terminal):
                 self.config['model'] = name
         elif self.cursor == 1:
             current = {'Ollama': 'Off (direct Ollama)'}.get(self.stack, self.stack)
-            choice = self.pick('Inference Backend', ['Off (direct Ollama)', 'PentestGPT', 'CAI adapter', 'VulnBot'], current)
+            options = ['Off (direct Ollama)'] + [name for name in STACKS if name != 'Ollama']
+            choice = self.pick('Inference Backend', options, current)
             if choice:
                 choice = {'Off (direct Ollama)': 'Ollama'}.get(choice, choice)
                 self.stack = choice
@@ -1383,13 +1483,25 @@ class ControlPanel(Terminal):
             value = self.edit(field, self.config[field])
             if value is not None:
                 self.config[field] = int(value) if field in ('seed', 'actions') else value
-        elif self.cursor < 9:
-            part = PARTS[self.cursor - 6]
-            if part in self.config['parts']:
+        elif self.cursor < 6 + len(ALL_PARTS):
+            part = ALL_PARTS[self.cursor - 6]
+            if part == MEMORY_PART:
+                # Cycle off -> clean -> poisoned -> safeguarded -> off.
+                current = self.config['condition'] if part in self.config['parts'] else None
+                nxt = CONDITION_CYCLE[(CONDITION_CYCLE.index(current) + 1) % len(CONDITION_CYCLE)]
+                if nxt is None:
+                    self.config['parts'].remove(part)
+                    self.set_notice('Memory poisoning: off.')
+                else:
+                    if part not in self.config['parts']:
+                        self.config['parts'].append(part)
+                    self.config['condition'] = nxt
+                    self.set_notice(f'Memory poisoning: {nxt} (run each condition as a separate sweep).')
+            elif part in self.config['parts']:
                 self.config['parts'].remove(part)
             else:
                 self.config['parts'].append(part)
-        elif self.cursor == 9:
+        elif self.cursor == 6 + len(ALL_PARTS):
             server.launch(self.config)
             self.scroll = {'output': 0, 'judge': 0, 'machine': 0}
             self.set_notice(f'{SYM_CHECK} Running. Judge exchanges appear after each response.')
@@ -1435,7 +1547,7 @@ class ControlPanel(Terminal):
                     elif self.tab != -1:
                         self.tab = -1
                         self.cursor = 0
-                elif self.page_detail and key in ('0', '1', '2', '3'):
+                elif self.page_detail and key in ('0', '1', '2', '3', '4'):
                     self.detail_offset = 0 if key == '0' else self.part_offsets.get(key, 0)
                 elif self.page_detail and key in ('n', 'N'):
                     if key == 'n':
@@ -1444,11 +1556,13 @@ class ControlPanel(Terminal):
                         target = next((o for o in reversed(self.case_offsets) if o < self.detail_offset), None)
                     if target is not None:
                         self.detail_offset = target
+                elif key == 'c' and self.tab == 1:
+                    self.open_comparison()
                 elif key == 'e' and self.tab == 1 and (self.page_detail or self.filtered_groups):
                     self.export_pdf(self.detail_group if self.page_detail else self.filtered_groups[self.cursor])
                 elif key == '\t' and self.tab == 0:
                     areas = ['setup', 'output', 'judge', 'machine']
-                    self.focus = areas[(areas.index(self.focus) + 1) % 3]
+                    self.focus = areas[(areas.index(self.focus) + 1) % len(areas)]
                 elif key in (curses.KEY_DOWN, curses.KEY_UP, 'j', 'k', curses.KEY_NPAGE, curses.KEY_PPAGE):
                     down = key in (curses.KEY_DOWN, 'j', curses.KEY_NPAGE)
                     step = 8 if key in (curses.KEY_NPAGE, curses.KEY_PPAGE) else 1
@@ -1460,7 +1574,7 @@ class ControlPanel(Terminal):
                         area = self.focus
                         self.scroll_stream(area, down, step)
                     else:
-                        count = 11 if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
+                        count = (6 + len(ALL_PARTS) + 2) if self.tab == 0 else len(self.filtered_groups) if self.tab == 1 else len(self.models)
                         self.cursor = max(0, min(max(0, count - 1), self.cursor + (step if down else -step)))
                 elif key == curses.KEY_END and ((self.tab == 0 and self.focus != 'setup') or self.tab == 3):
                     self.follow[self.focus] = True
@@ -1528,6 +1642,7 @@ def headless_run(args):
         parts.append('agent-safety')
     if getattr(args, 'memory_poisoning', False):
         parts.append('memory-poisoning')
+    parts.extend((getattr(args, 'security_category', None) or []))
     if not parts:
         print('error: all parts skipped, nothing to run', file=sys.stderr)
         return 1
@@ -1609,17 +1724,18 @@ def main():
                         choices=('', 'codex-cli', 'claude-cli', 'api', 'anthropic', 'heuristic'),
                         help='Judge backend; auto-detected for claude-* models')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--actions', type=int, default=200, help='Max actions for local challenges')
+    parser.add_argument('--actions', type=int, default=60, help='Max actions for local challenges')
     parser.add_argument('--run', action='store_true',
                         help='Launch benchmark immediately without the TUI and stream output')
     parser.add_argument('--skip-questions', action='store_true')
     parser.add_argument('--skip-local', action='store_true')
     parser.add_argument('--skip-agent-safety', action='store_true')
+    parser.add_argument('--security-category', action='append', choices=('rag_security','prompt_injection','prompt_obfuscation','system_prompt_extraction'))
     parser.add_argument('--memory-poisoning', action='store_true',
                         help='Add Part 4: cross-session memory-poisoning challenges, run under --condition')
     parser.add_argument('--condition', choices=('clean', 'poisoned', 'safeguarded'), default='clean',
                         help='Memory-poisoning condition for Part 4 (run the three as separate sweeps)')
-    parser.add_argument('--wrapper', choices=('pentestgpt', 'cai', 'vulnbot'),
+    parser.add_argument('--wrapper', choices=('pentestgpt', 'cai', 'vulnbot', 'aegisagent'),
                         help='Run the model behind a security wrapper, started automatically')
     parser.add_argument('--start', action='store_true',
                         help='Open the TUI and start the benchmark right away on Live Activity')

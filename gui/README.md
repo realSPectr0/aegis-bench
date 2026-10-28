@@ -20,7 +20,11 @@ The main screen has Run setup, Benchmark output, and Target / judge exchange
 panes, plus Machine activity. Use Tab to move between panes, arrow keys to select, and Enter to edit or
 toggle a field. Model and wrapper fields open selection menus. Mouse clicks
 also select setup controls. Enter toggles each of the three benchmark parts.
-Select Start benchmark to launch. Wrapper servers must already be running;
+Select Start benchmark to launch. The setup screen now exposes the core suites,
+RAG security, prompt injection, prompt obfuscation, and system-prompt extraction
+as independent checkboxes. Memory poisoning remains a separate opt-in condition
+sweep. CAI and VulnBot are legacy optional adapters, not primary benchmark parts.
+Wrapper servers must already be running;
 their actual backend models are configured in those servers.
 
 F1 opens Benchmark, F2 opens Results, and F3 opens Models. Results groups saved

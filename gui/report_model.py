@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import grading_scale
 
 THINK = re.compile(r'<think>(.*?)(?:</think>|$)', re.S)
-PART_ORDER = ('Safety questions', 'Local challenges', 'Agent safety')
+PART_ORDER = ('Safety questions', 'Local challenges', 'Agent safety', 'Security probes')
 SCORE_SEP = '\u00b7'
 
 
@@ -195,17 +195,85 @@ def challenge_case(case):
     }
 
 
+def security_case(case):
+    """Security-probe case: one attack (or benign control) against the raw model.
+
+    Carries the full attack setup, the model's output and every outcome flag so the
+    PDF can show how a probe landed. Colour comes from the outcome bucket, not a score.
+    """
+    benign = bool(case.get('benign'))
+    attack_success = bool(case.get('attack_success'))
+    task_correct = bool(case.get('task_correct'))
+    unnecessary = bool(case.get('unnecessary_refusal'))
+    if case.get('error'):
+        outcome, result = '', (case.get('normalized_outcome') or 'error').replace('_', ' ')
+    elif benign:
+        outcome = 'fail' if unnecessary else ('pass' if task_correct else 'partial')
+        result = 'Over-refused' if unnecessary else ('Handled' if task_correct else 'Task missed')
+    elif attack_success:
+        outcome, result = 'fail', 'Attack succeeded'
+    elif not task_correct:
+        outcome, result = 'partial', 'Defended, task missed'
+    else:
+        outcome, result = 'pass', 'Defended'
+    flags = []
+    if case.get('injection_followed'):
+        flags.append('followed injection')
+    if case.get('protected_value_disclosed'):
+        flags.append('leaked protected value')
+    if case.get('tool_executed'):
+        flags.append('executed tool')
+    if case.get('false_positive'):
+        flags.append('false positive')
+    tags = [value for value in (case.get('attack_type'), 'benign control' if benign else None) if value]
+    return {
+        'id': case.get('case_id', '?'), 'section': case.get('category', 'security'), 'kind': 'security',
+        'expected': case.get('expected_safe_behavior', ''), 'direction': 'lower', 'score': None,
+        'outcome': outcome, 'result': result, 'label': ', '.join(flags), 'judge': None,
+        'goal': case.get('objective', ''), 'turns': [], 'steps': [], 'security': case,
+        'error': case.get('error') or '', 'tags': tags,
+        'model_seconds': case.get('latency_seconds'), 'command_seconds': None,
+        'total_seconds': case.get('latency_seconds'),
+    }
+
+
+def part_builder(part):
+    if part == 'Safety questions':
+        return question_case
+    if part == 'Security probes':
+        return security_case
+    return challenge_case
+
+
 def load_part(path, part):
     data = json.loads(Path(path).read_text())
-    builder = question_case if part == 'Safety questions' else challenge_case
+    builder = part_builder(part)
     cases = [builder(case) for case in data.get('results', [])]
     sections = {}
     for case in cases:
         sections.setdefault(case['section'], []).append(case)
     started, finished = data.get('started_at'), data.get('finished_at')
-    return {'part': part, 'path': str(path), 'data': data, 'cases': cases, 'sections': sections,
+    return {'part': part, 'path': str(path), 'data': data, 'datas': [data], 'sources': [(str(path), data)],
+            'cases': cases, 'sections': sections,
             'total_seconds': data.get('total_seconds') or elapsed(started, finished),
             'judge': ' / '.join(v for v in (data.get('judge_provider'), data.get('judge_model')) if v)}
+
+
+def merge_parts(parts, name):
+    """Fold several files that share a part (e.g. the four security categories) into one."""
+    cases, sections, sources, metrics = [], {}, [], []
+    total = 0.0
+    for part in parts:
+        cases += part['cases']
+        for section, group in part['sections'].items():
+            sections.setdefault(section, []).extend(group)
+        sources += part.get('sources', [])
+        metrics += part.get('metrics', [])
+        total += part['total_seconds'] or 0
+    return {'part': name, 'path': parts[0]['path'], 'data': parts[0]['data'],
+            'datas': [part['data'] for part in parts], 'sources': sources, 'cases': cases,
+            'sections': sections, 'total_seconds': total or None, 'metrics': metrics,
+            'judge': next((part['judge'] for part in parts if part['judge']), '')}
 
 
 def elapsed(started, finished):
@@ -219,11 +287,14 @@ def load_run(rows, resolve):
     """Build a run from server.reports() rows; resolve maps a row path to a file."""
     parts = []
     for name in PART_ORDER:
+        loaded = []
         for row in rows:
             if row['part'] == name:
                 part = load_part(resolve(row['path']), name)
                 part['metrics'] = row.get('metrics', [])
-                parts.append(part)
+                loaded.append(part)
+        if loaded:
+            parts.append(loaded[0] if len(loaded) == 1 else merge_parts(loaded, name))
     first = parts[0]['data'] if parts else {}
     seed = next((p['data']['seed'] for p in parts if p['data'].get('seed') is not None), None)
     return {'model': rows[0]['model'] if rows else 'Unknown', 'date': min(r['date'] for r in rows) if rows else '',

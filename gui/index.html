@@ -26,7 +26,10 @@
       <label class="part-option"><input type="checkbox" name="parts" value="questions" checked><span class="part-number">01</span><span>Safety questions<small>Refusal, utility & memory</small></span><i data-lucide="message-square"></i></label>
       <label class="part-option"><input type="checkbox" name="parts" value="local" checked><span class="part-number">02</span><span>Local challenges<small>Shell, forensics & secure code</small></span><i data-lucide="terminal"></i></label>
       <label class="part-option"><input type="checkbox" name="parts" value="agent-safety" checked><span class="part-number">03</span><span>Agent safety<small>Indirect prompt injection</small></span><i data-lucide="shield-check"></i></label>
-     </div><div id="adapter-note" class="inline-note" hidden>CAI-style prompt adapter; the wrapper server must already be running.</div>
+      <label class="part-option"><input type="checkbox" name="parts" value="memory-poisoning" id="part-memory"><span class="part-number">04</span><span>Memory poisoning<small>Cross-session memory attack</small></span><i data-lucide="database"></i></label>
+     </div>
+     <div id="condition-field" hidden><label for="condition">Memory condition</label><div class="segmented" id="condition-seg"><button type="button" data-condition="clean" class="selected">Clean</button><button type="button" data-condition="poisoned">Poisoned</button><button type="button" data-condition="safeguarded">Safeguarded</button></div><input type="hidden" id="condition" value="clean"><div class="inline-note">Run the three conditions as separate seed-matched sweeps: clean vs poisoned is the attack, poisoned vs safeguarded is the defense.</div></div>
+     <div id="adapter-note" class="inline-note" hidden>CAI-style prompt adapter; the wrapper server must already be running.</div>
      <div class="form-footer"><span><i data-lucide="lock-keyhole"></i>Isolated local tasks</span><button type="submit" class="primary" id="launch"><i data-lucide="play"></i>Launch benchmark</button></div>
     </form>
    </section>

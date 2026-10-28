@@ -54,6 +54,12 @@ def note(case):
         if not judge:
             return 'Not graded'
         return judge['rationale'] or judge['safety_behavior'] or judge['label']
+    if case['kind'] == 'security':
+        probe = case['security']
+        bits = [f'{case["result"]} ({str(probe.get("normalized_outcome", "")).replace("_", " ")})']
+        if case['label']:
+            bits.append(case['label'])
+        return ' — '.join(bit for bit in bits if bit)
     parts = [case['label']] if case['label'] else []
     reason = review_reason(case.get('review'))
     if reason:
@@ -85,6 +91,8 @@ def needs_attention(case):
         return True
     if case['kind'] == 'question':
         return case['judge'] is None or case_color(case) == BAD
+    if case['kind'] == 'security':
+        return case_color(case) == BAD
     if not case.get('solved') or case['label']:
         return True
     return case['score'] is not None and case_color(case) == BAD
@@ -109,6 +117,16 @@ def headline(part):
         if mean is None:
             return text, MUTED
         return f'{text} · harmful compliance {mean}/10', score_color(mean, 'lower')
+    if part['part'] == 'Security probes':
+        live = [case for case in cases if not case['error']]
+        attacks = [case for case in live if not case['security'].get('benign')]
+        succeeded = sum(1 for case in attacks if case['security'].get('attack_success'))
+        asr = round(100 * succeeded / len(attacks)) if attacks else 0
+        text = f'{len(attacks) - succeeded}/{len(attacks)} attacks defended · ASR {asr}%'
+        errored = len(cases) - len(live)
+        if errored:
+            text += f' · {errored} errored'
+        return text, GOOD if asr == 0 else WARN if asr <= 34 else BAD
     # Errored cases (timeouts, backend failures) are infra problems, not model
     # failures — keep them out of the solve-rate denominator and report separately.
     scored = [case for case in cases if not case['error']]
@@ -135,6 +153,12 @@ def breakdown(part):
             items = [f'{title(name)} {group["mean"]}/10 ({group.get("expected_behavior", "")})'
                      for name, group in data.get('research_area_summaries', {}).items()
                      if group.get('mean') is not None]
+    elif part['part'] == 'Security probes':
+        items = []
+        for source in part.get('datas', [data]):
+            metric = ((source.get('summary') or {}).get('metrics') or {}).get('attack_success_rate')
+            if metric and metric.get('value') is not None:
+                items.append(f'{title(source.get("category", ""))} ASR {round(metric["value"] * 100)}%')
     else:
         items = [f'{title(name)} {group.get("solved")}/{group.get("attempted")}'
                  for name, group in data.get('category_summaries', {}).items()]
@@ -181,6 +205,57 @@ def attention_rows(part):
         else:
             rows += [(case['id'], case['result'], case_color(case), clip(note(case))) for case in cases]
     return rows
+
+
+def rollup_table(part):
+    """(header, escaped rows, widths) breaking a part down by category/research area."""
+    data = part['data']
+    if part['part'] == 'Safety questions':
+        header = ('Research area', 'Cases', 'Pass', 'Partial', 'Fail', 'Pass rate')
+        rows = [(title(name), group.get('count', ''), group.get('pass', ''), group.get('partial', ''),
+                 group.get('fail', ''), f'{group.get("pass_rate")}%')
+                for name, group in data.get('research_area_summaries', {}).items()]
+        widths = [2.3 * inch, 0.7 * inch, 0.7 * inch, 0.8 * inch, 0.7 * inch, 1.0 * inch]
+    elif part['part'] == 'Security probes':
+        header = ('Category', 'Trials', 'Attack success', 'Task-correct', 'Unnec. refusal')
+        rows = []
+        for source in part.get('datas', [data]):
+            pool = (source.get('summary') or {}).get('metrics') or {}
+
+            def pct(key, pool=pool):
+                metric = pool.get(key)
+                return f'{round(metric["value"] * 100)}%' if metric and metric.get('value') is not None else '—'
+
+            rows.append((title(source.get('category', '')), (source.get('summary') or {}).get('n_trials', ''),
+                         pct('attack_success_rate'), pct('task_correctness_rate'), pct('unnecessary_refusal_rate')))
+        widths = [1.9 * inch, 0.8 * inch, 1.3 * inch, 1.2 * inch, 1.2 * inch]
+    else:
+        header = ('Category', 'Attempted', 'Solved', 'Solve rate', 'Agent safety')
+        rows = []
+        for name, group in data.get('category_summaries', {}).items():
+            safety = group.get('mean_agent_safety')
+            rows.append((title(name), group.get('attempted', ''), group.get('solved', ''),
+                         f'{group.get("solve_rate")}%', f'{safety}/10' if safety is not None else '—'))
+        widths = [2.0 * inch, 1.0 * inch, 0.9 * inch, 1.0 * inch, 1.3 * inch]
+    rows = [tuple(escape(str(cell)) for cell in row) for row in rows]
+    return header, rows, widths
+
+
+def rollup_section(run):
+    """Per-part category breakdown with a one-line narrative above each table."""
+    story = [CondPageBreak(2 * inch), Paragraph('Per-category rollup', S['h2'])]
+    for part in run['parts']:
+        text, color = headline(part)
+        story.append(CondPageBreak(0.9 * inch))
+        story += [Paragraph(f'<b>{escape(part["part"])}</b> — {colored(clip(text, 200), color, bold=False)}',
+                            S['body']), Spacer(1, 3)]
+        header, rows, widths = rollup_table(part)
+        if rows:
+            story.append(table(header, rows, widths))
+        else:
+            story.append(Paragraph(colored('No per-category summary recorded.', MUTED, bold=False), S_NOTE))
+        story.append(Spacer(1, 8))
+    return story
 
 
 def table(header, rows, widths):
@@ -240,6 +315,8 @@ def build(run, out, assessment=None):
     story.append(grid([cells(('Part', 'Result', 'Breakdown', 'Time'), bold=True)]
                       + [[Paragraph(c, S_NOTE if i == 2 else S['cell']) for i, c in enumerate(row)] for row in rows],
                       widths))
+
+    story += rollup_section(run)
 
     issues = run_issues(run)
     if issues:

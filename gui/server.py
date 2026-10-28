@@ -38,8 +38,21 @@ def report_path(relative):
     return path
 
 
+SECURITY_METRICS = (('attack_success_rate', 'attack success', 'lower'),
+                    ('task_correctness_rate', 'task correct', 'higher'),
+                    ('unnecessary_refusal_rate', 'unnecessary refusal', 'lower'))
+
+
 def metrics(data):
     values = []
+    if str(data.get('schema_version', '')).startswith('security-category'):
+        pool = (data.get('summary') or {}).get('metrics') or {}
+        for key, label, direction in SECURITY_METRICS:
+            metric = pool.get(key)
+            if metric and metric.get('value') is not None:
+                values.append({'name': label, 'value': round(metric['value'] * 100, 1),
+                               'unit': '%', 'direction': direction})
+        return values
     if data.get('scale_version') == grading_scale.SCALE_VERSION:
         for name, group in data.get('research_area_summaries', {}).items():
             if group.get('pass_rate') is not None:
@@ -68,8 +81,10 @@ def reports():
             data = json.loads(path.read_text())
             if not isinstance(data, dict) or not isinstance(data.get('results'), list):
                 continue
-            part = 'Legacy Bandit' if 'bandit' in path.stem else 'Agent safety' if 'agent_safety' in path.stem else 'Local challenges' if 'category_summaries' in data else 'Safety questions'
-            rows.append({'path': str(path.relative_to(RESULTS)), 'model': data.get('target_model', 'Unknown'),
+            part = ('Security probes' if str(data.get('schema_version', '')).startswith('security-category')
+                    else 'Legacy Bandit' if 'bandit' in path.stem else 'Agent safety' if 'agent_safety' in path.stem
+                    else 'Local challenges' if 'category_summaries' in data else 'Safety questions')
+            rows.append({'path': str(path.relative_to(RESULTS)), 'model': data.get('target_model') or data.get('model') or 'Unknown',
                          'part': part, 'date': data.get('started_at', ''), 'mtime': path.stat().st_mtime,
                          'count': len(data['results']), 'metrics': metrics(data),
                          'seed': data.get('seed'), 'suite_version': data.get('suite_version')})
@@ -104,7 +119,9 @@ def launch(config):
     if not model or len(model) > 200 or parsed.scheme not in ('http', 'https') or not parsed.hostname:
         raise ValueError('Enter a model and valid HTTP API endpoint')
     parts = config.get('parts', [])
-    if not parts or any(part not in ('questions', 'local', 'agent-safety', 'memory-poisoning') for part in parts):
+    valid_security = {'rag-security', 'prompt-injection', 'prompt-obfuscation', 'system-prompt-extraction',
+                      'rag_security', 'prompt_injection', 'prompt_obfuscation', 'system_prompt_extraction'}
+    if not parts or any(part not in ('questions', 'local', 'agent-safety', 'memory-poisoning') and part not in valid_security for part in parts):
         raise ValueError('Select at least one benchmark part')
     condition = str(config.get('condition', 'clean')).strip() or 'clean'
     if condition not in ('clean', 'poisoned', 'safeguarded'):
@@ -139,9 +156,17 @@ def launch(config):
     # Memory poisoning is opt-in and carries a condition (a run fixes one condition).
     if 'memory-poisoning' in parts:
         command += ['--run-memory-poisoning', '--condition', condition]
+    security_map = {'rag-security': 'rag_security', 'prompt-injection': 'prompt_injection',
+                    'prompt-obfuscation': 'prompt_obfuscation', 'system-prompt-extraction': 'system_prompt_extraction'}
+    for part, category in security_map.items():
+        if part in parts:
+            command += ['--security-category', category]
+    for category in ('rag_security', 'prompt_injection', 'prompt_obfuscation', 'system_prompt_extraction'):
+        if category in parts:
+            command += ['--security-category', category]
     wrapper = config.get('wrapper') or None
     if wrapper:
-        if wrapper not in ('pentestgpt', 'cai', 'vulnbot'):
+        if wrapper not in ('pentestgpt', 'cai', 'vulnbot', 'aegisagent'):
             raise ValueError('Unknown wrapper')
         # run_observed starts the wrapper in front of the model at `endpoint`.
         command += ['--wrapper', wrapper]

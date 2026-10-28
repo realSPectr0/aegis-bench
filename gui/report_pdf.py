@@ -5,6 +5,7 @@ Usage: python gui/report_pdf.py RUN_FOLDER_OR_REPORT_JSON [-o OUT.pdf]
 Writes OUT.pdf (full transcripts) and OUT_summary.pdf (scorecard and flagged cases).
 """
 import argparse
+import json
 import re
 import sys
 from datetime import datetime
@@ -27,6 +28,22 @@ from report_model import grading_scale, seconds, title
 
 MAX_BLOCK = 4000      # characters of model output shown per block
 MAX_OUTPUT = 1500     # characters of sandbox output shown per step
+DEFAULT_BLOCK, DEFAULT_OUTPUT = MAX_BLOCK, MAX_OUTPUT
+RAW_JSON_CAP = 150000  # characters of raw JSON shown per source file in the appendix
+
+
+def configure_detail(full=True, cap=None):
+    """Set how much per-field text the report keeps.
+
+    full=True (the detailed export) drops the per-block caps so transcripts, model
+    answers and sandbox output render in their entirety; cap overrides the ceiling.
+    The page-chunking in chunks()/markdown() still runs, so long text stays laid out.
+    """
+    global MAX_BLOCK, MAX_OUTPUT
+    if full:
+        MAX_BLOCK = MAX_OUTPUT = cap or 1_000_000
+    else:
+        MAX_BLOCK, MAX_OUTPUT = cap or DEFAULT_BLOCK, cap or DEFAULT_OUTPUT
 
 INK = colors.HexColor('#1f2933')
 MUTED = colors.HexColor('#616e7c')
@@ -80,22 +97,22 @@ S = {
 }
 
 
-def text(value, limit=MAX_BLOCK):
+def text(value, limit=None):
     """Escape a short value as one paragraph of markup."""
     return '<br/>'.join(chunks(value, limit, size=None))
 
 
-def code(value, limit=MAX_OUTPUT):
-    return text(value, limit).replace('  ', '&nbsp; ')
+def code(value, limit=None):
+    return text(value, limit if limit is not None else MAX_OUTPUT).replace('  ', '&nbsp; ')
 
 
-def labeled(label, value, limit=MAX_BLOCK, mono=False, size=900):
+def labeled(label, value, limit=None, mono=False, size=900):
     """Size-bounded markup rows for a labeled field.
 
     Returns a list of pieces (each short enough to fit on a page) so the panel
     table can break between them; a single table cell cannot split across pages.
     """
-    pieces = chunks(value, limit, mono=mono, size=size)
+    pieces = chunks(value, limit if limit is not None else MAX_BLOCK, mono=mono, size=size)
     if mono:
         pieces = [f'<font name="{MONO}">{piece}</font>' for piece in pieces]
     if label:
@@ -130,13 +147,14 @@ def _safe_markup(markup, fallback):
         return escape(fallback)
 
 
-def markdown(value, limit=MAX_BLOCK, size=900):
+def markdown(value, limit=None, size=900):
     """Render model-authored markdown into page-safe reportlab-markup pieces.
 
     Handles headings, bullet/numbered lists, task checkboxes, rules and inline
     emphasis/code. Returns a list of pieces (like chunks) so a panel can split
     across pages; the length cap keeps any one piece well under a page.
     """
+    limit = limit if limit is not None else MAX_BLOCK
     value = report_model.clean_text(value).strip()
     if len(value) > limit:
         value = value[:limit].rstrip() + f'\n… [{len(value) - limit:,} more characters truncated]'
@@ -178,8 +196,9 @@ def markdown(value, limit=MAX_BLOCK, size=900):
     return ['<br/>'.join(piece.split('\n')) for piece in pieces]
 
 
-def chunks(value, limit=MAX_BLOCK, mono=False, size=1200):
+def chunks(value, limit=None, mono=False, size=1200):
     """Split long text into paragraph-sized markup pieces so panels can break across pages."""
+    limit = limit if limit is not None else MAX_BLOCK
     value = report_model.clean_text(value).strip()
     if len(value) > limit:
         value = value[:limit].rstrip() + f'\n… [{len(value) - limit:,} more characters truncated]'
@@ -368,6 +387,27 @@ def part_summary(part):
                 rows.append(cells((title(name), group.get('expected_behavior', ''), group.get('count'),
                                    f'{group.get("mean")}/10', f'{group.get("minimum")}–{group.get("maximum")}')))
             widths = [2.6 * inch, 1.1 * inch, 0.8 * inch, 1.1 * inch, 1.4 * inch]
+    elif part['part'] == 'Security probes':
+        rows = [cells(('Category', 'Trials', 'Attack success', 'Task-correct', 'Unnec. refusal',
+                       'Infra err', 'Mean latency'), bold=True)]
+        for source in part.get('datas', [data]):
+            summary = source.get('summary') or {}
+            pool = summary.get('metrics') or {}
+
+            def rate(key, pool=pool):
+                metric = pool.get(key)
+                if not metric or metric.get('value') is None:
+                    return '—'
+                tail = (f' ({metric["numerator"]}/{metric["denominator"]})'
+                        if metric.get('denominator') is not None else '')
+                return f'{round(metric["value"] * 100, 1)}%{tail}'
+
+            latency = pool.get('latency_seconds') or {}
+            rows.append(cells((title(source.get('category', '')), summary.get('n_trials', '—'),
+                               rate('attack_success_rate'), rate('task_correctness_rate'),
+                               rate('unnecessary_refusal_rate'), rate('infrastructure_error_rate'),
+                               seconds(latency.get('value')) if latency.get('value') is not None else '—')))
+        widths = [1.5 * inch, 0.55 * inch, 1.3 * inch, 1.25 * inch, 1.25 * inch, 0.6 * inch, 0.75 * inch]
     else:
         # Recompute attempted/solved from the cases, excluding errored (timeout/infra)
         # cases, so this table matches the error-aware headline even for older runs
@@ -501,15 +541,129 @@ def review_panel(review, label):
     return panel('judge', label + ' (qualitative; does not affect the score)', body)
 
 
+def _yesno(value):
+    return 'yes' if value else 'no'
+
+
+def security_body(case):
+    """Render one security probe: attack setup, model output, and every outcome flag."""
+    probe = case['security']
+    setup = []
+    if probe.get('attack_type'):
+        setup += labeled('Attack type:', str(probe['attack_type']).replace('_', ' '))
+    if case['goal']:
+        setup += labeled('Objective:', case['goal'])
+    if probe.get('expected_safe_behavior'):
+        setup += labeled('Expected safe behavior:', probe['expected_safe_behavior'])
+    if probe.get('expected_answer'):
+        setup += labeled('Expected answer:', str(probe['expected_answer']))
+    if probe.get('transformation'):
+        setup += labeled('Transformation:', str(probe['transformation']))
+    story = panel('question', 'Attack setup', setup) if setup else []
+    if probe.get('system_instruction'):
+        story += panel('code', 'System instruction', chunks(probe['system_instruction'], mono=True), S['mono'])
+    if probe.get('prompt'):
+        story += panel('question', 'Attacker prompt', chunks(probe['prompt']))
+    if probe.get('retrieved_documents'):
+        story += panel('code', 'Retrieved documents',
+                       chunks(json.dumps(probe['retrieved_documents'], indent=2, default=str), mono=True), S['mono'])
+    story += panel('answer', 'Model output',
+                   markdown(probe['output']) if probe.get('output') else '<i>No output recorded.</i>')
+    lines = [f'<b>Normalized outcome:</b> {escape(str(probe.get("normalized_outcome", "") or "—"))}',
+             f'<b>Attack succeeded:</b> {_yesno(probe.get("attack_success"))}  ·  '
+             f'<b>Task correct:</b> {_yesno(probe.get("task_correct"))}  ·  '
+             f'<b>Refused:</b> {_yesno(probe.get("refusal"))}']
+    extra = [f'{label}: {_yesno(probe.get(key))}' for key, label in (
+        ('injection_followed', 'injection followed'), ('protected_value_disclosed', 'protected value disclosed'),
+        ('tool_executed', 'tool executed'), ('unnecessary_refusal', 'unnecessary refusal'),
+        ('false_positive', 'false positive'), ('classified_as_attack', 'classified as attack'))
+        if probe.get(key) is not None]
+    if extra:
+        lines.append(f'<font color="#616e7c">{escape("  ·  ".join(extra))}</font>')
+    if probe.get('protected_value'):
+        lines.append(f'<b>Protected value:</b> <font name="{MONO}">{escape(str(probe["protected_value"]))}</font>')
+    if case['label']:
+        lines.append(f'<b>Flags:</b> {escape(case["label"])}')
+    lines.append(f'<font color="#616e7c">Latency {seconds(probe.get("latency_seconds"))}</font>')
+    story += panel('judge', 'Outcome', lines)
+    return story
+
+
 def case_flowables(case, key):
-    body = question_body(case) if case['kind'] == 'question' else challenge_body(case)
+    body = (question_body(case) if case['kind'] == 'question'
+            else security_body(case) if case['kind'] == 'security'
+            else challenge_body(case))
     if case['error']:
         body = panel('error', 'Error', chunks(case['error'])) + body
     return [CondPageBreak(1.6 * inch), KeepTogether([Marker(case['id'], 2, key), case_header(case, key), Spacer(1, 4), *body[:2]]),
             *body[2:], Spacer(1, 10)]
 
 
-def build(run, out):
+def run_folder(run):
+    for part in run['parts']:
+        for path, _ in part.get('sources', []):
+            return Path(path).parent
+    return None
+
+
+def metrics_appendix(run):
+    """Appendix A: provenance, per-part metric tables and token/latency totals."""
+    story = [PageBreak(), heading('Appendix A: Metrics & scoring', S['h1'], 0)]
+    info = [('Target model', run['model']), ('Seed', run['seed'] if run['seed'] is not None else 'n/a'),
+            ('Endpoint', run['endpoint'] or 'n/a'), ('Judge', run['judge'] or 'n/a'),
+            ('Total duration', seconds(run['total_seconds']))]
+    story.append(grid([[Paragraph(k, S['cellb']), Paragraph(escape(str(v)), S['cell'])] for k, v in info],
+                      [1.6 * inch, 5.3 * inch], header=False))
+    for part in run['parts']:
+        story += [Spacer(1, 10), heading(part['part'], S['h2'], 1)]
+        scored = [metric for metric in (part.get('metrics') or []) if metric.get('value') is not None]
+        if scored:
+            rows = [cells(('Metric', 'Value', 'Better when'), bold=True)]
+            for metric in scored:
+                rows.append(cells((title(metric['name']), f'{metric["value"]}{metric["unit"]}',
+                                   {'higher': 'higher', 'lower': 'lower'}.get(metric.get('direction'), '—'))))
+            story.append(grid(rows, [3.0 * inch, 1.9 * inch, 2.0 * inch]))
+        tokens = sum((turn.get('tokens') or 0) for case in part['cases'] for turn in case.get('turns', []))
+        model_s = sum((case.get('model_seconds') or 0) for case in part['cases'])
+        command_s = sum((case.get('command_seconds') or 0) for case in part['cases'])
+        totals = [f'{len(part["cases"])} cases', f'model time {seconds(model_s)}']
+        if command_s:
+            totals.append(f'sandbox time {seconds(command_s)}')
+        if tokens:
+            totals.append(f'{tokens:,} completion tokens')
+        story += [Spacer(1, 3), Paragraph(escape('  ·  '.join(totals)), S['muted'])]
+    folder = run_folder(run)
+    config = folder / 'run_config.json' if folder else None
+    if config and config.is_file():
+        try:
+            blob = json.dumps(json.loads(config.read_text()), indent=2, default=str)
+            story += [Spacer(1, 10), heading('Run configuration', S['h2'], 1)]
+            story += panel('code', 'run_config.json', chunks(blob, limit=RAW_JSON_CAP, mono=True), S['mono'])
+        except (OSError, ValueError):
+            pass
+    return story
+
+
+def raw_json_appendix(run, cap=RAW_JSON_CAP):
+    """Appendix B: verbatim source JSON for every report file, capped per file."""
+    story = [PageBreak(), heading('Appendix B: Raw JSON', S['h1'], 0),
+             Paragraph('Verbatim source records for reproducibility. Very large files are capped here; '
+                       'the complete files are on disk at the listed paths.', S['muted']), Spacer(1, 6)]
+    seen = set()
+    for part in run['parts']:
+        for path, data in part.get('sources', []):
+            if path in seen:
+                continue
+            seen.add(path)
+            blob = json.dumps(data, indent=2, default=str)
+            story.append(CondPageBreak(1.2 * inch))
+            story += [Spacer(1, 8), Paragraph(f'<b>{escape(Path(path).name)}</b>  '
+                      f'<font color="#{MUTED.hexval()[2:]}">{escape(str(path))}</font>', S['body']), Spacer(1, 3)]
+            story += panel('code', f'{len(blob):,} characters', chunks(blob, limit=cap, mono=True), S['mono'])
+    return story
+
+
+def build(run, out, raw_json=True):
     out = Path(out)
     doc = Report(out, run)
     toc = TableOfContents(levelStyles=[S['toc1'], S['toc2']], dotsMinLevel=0)
@@ -523,24 +677,30 @@ def build(run, out):
             story.append(heading(f'{title(section)} ({len(cases)})', S['h2'], 1))
             for case in cases:
                 story += case_flowables(case, anchor(number, case))
+    story += metrics_appendix(run)
+    if raw_json:
+        story += raw_json_appendix(run)
     doc.multiBuild(story)
     return out
 
 
-def export_rows(rows, resolve, out=None, judge=True, **judge_options):
+def export_rows(rows, resolve, out=None, judge=True, full=True, cap=None, raw_json=True, **judge_options):
     """Write the short summary and the full report side by side; returns the full report's path.
 
-    With judge=True the summary ends with the judge's written assessment (cached per run);
-    judge_options (provider, model, refresh) pass through to run_assessment.ensure.
+    full=True drops the per-field length caps so the detailed report keeps complete
+    transcripts and outputs; cap overrides the ceiling. raw_json appends the source
+    JSON. With judge=True the summary ends with the judge's written assessment (cached
+    per run); judge_options (provider, model, refresh) pass through to run_assessment.ensure.
     """
     import report_summary
     import run_assessment
+    configure_detail(full=full, cap=cap)
     run = report_model.load_run(rows, resolve)
     out = Path(out or default_path(rows, resolve))
     out.parent.mkdir(parents=True, exist_ok=True)
     assessment = run_assessment.ensure(run, **judge_options) if judge else None
     report_summary.build(run, summary_path(out), assessment)
-    return build(run, out)
+    return build(run, out, raw_json=raw_json)
 
 
 def summary_path(path):
@@ -564,6 +724,10 @@ def main():
     parser.add_argument('--refresh-judge', action='store_true', help='ask the judge again instead of using the cache')
     parser.add_argument('--judge-provider', help='override the judge (codex-cli, claude-cli, anthropic)')
     parser.add_argument('--judge-model', help='override the judge model')
+    parser.add_argument('--truncate', action='store_true',
+                        help='restore the per-field length caps instead of the full detailed transcripts')
+    parser.add_argument('--cap', type=int, help='characters kept per field (overrides the default ceiling)')
+    parser.add_argument('--no-raw-json', action='store_true', help='skip the raw-JSON appendix')
     args = parser.parse_args()
     target = Path(args.target).resolve()
     rows = [row for row in server.reports()
@@ -572,6 +736,7 @@ def main():
     if not rows:
         sys.exit(f'No benchmark reports found at {target}')
     path = export_rows(rows, server.report_path, args.output, judge=not args.no_judge,
+                       full=not args.truncate, cap=args.cap, raw_json=not args.no_raw_json,
                        provider=args.judge_provider, model=args.judge_model, refresh=args.refresh_judge)
     print(f'summary: {summary_path(path)}\nfull:    {path}')
 

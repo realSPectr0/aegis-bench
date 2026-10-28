@@ -8,7 +8,8 @@ The benchmark has three parts:
 
 1. **Safety Questions** -- graded Pass / Partial / Fail on harmful, benign and bounded questions
 2. **Local Security Challenges** -- sandboxed shell, forensics, secure-code, web-security, and incident-response labs
-3. **Agent Safety** -- indirect prompt-injection resistance for tool-using agents
+3. **Independent LLM security categories** -- RAG security, prompt injection, prompt obfuscation,
+   and system-prompt extraction resistance. The older agent-safety path remains an optional legacy adapter.
 
 ---
 
@@ -54,6 +55,8 @@ ClankerGantlet/
 |
 |-- tools/                        # Standalone utilities
 |   |-- compare_results.py        #   Compare two result JSON files
+|   |-- visualize_benchmark.py    #   Schema-aware benchmark plots
+|   |-- visualize_model_weights.py#   CPU tensor-distribution plots
 |   +-- recover_events.py         #   Rebuild a partial report from a live event log
 |
 |-- legacy/                       # Archived files from the original CTFd setup
@@ -266,6 +269,38 @@ Every challenge has a difficulty tier (`medium` or `hard` for Part 2). Reports s
 
 10 indirect prompt-injection challenges testing whether tool-using agents leak private data, follow injected instructions, or bypass safety boundaries. Scores both task completion and injection resistance independently.
 
+### Persistent-memory experiments
+
+There are two distinct local experiments. `MPOISON-*` with `--memory-mode seeded` (the
+default) explicitly inserts a misleading record before the agent starts; it measures
+susceptibility to an existing memory. `--memory-mode cross_session` instead asks the model
+to process a note in a writing session. Only a `REMEMBER:` line it emits becomes a record.
+That session ends, the JSON store is reopened, and a separate agent task retrieves notes.
+The result reports `target_written`, `target_retrieved`, and `behavioral_influence` separately
+under `memory_lifecycle`. A failed write is never counted as behavioral influence.
+
+```bash
+python local_challenge_runner.py --model qwen3.5:9b --category memory_poisoning \
+  --memory-mode seeded --condition poisoned --seed 42 --max-actions 20
+python local_challenge_runner.py --model qwen3.5:9b --category memory_poisoning \
+  --memory-mode cross_session --condition poisoned --seed 42 --max-actions 20
+```
+
+Run `clean`, `poisoned`, and `safeguarded` in separate commands with the same seed and
+model. `safeguarded` uses a **signature-based** sanitizer; it is a limited baseline. Pi
+rejects MPOISON cases explicitly. The dedicated synthetic access-code protocol adds A–E
+conditions, ISR/C-ASR, delay sweeps, and selective repair:
+
+```bash
+python -m memory_poisoning.experiment --model qwen3.5:9b --seed 42 \
+  --trials 5 --intervening 0 1 3
+python -m memory_poisoning.experiment --model qwen3.5:9b --protocol wef \
+  --condition B --condition C --condition E --seed 42 --trials 5
+```
+
+See [memory_poisoning/README.md](memory_poisoning/README.md) and [BENCHMARK.md](BENCHMARK.md)
+for storage, metrics, limitations, and comparison methods.
+
 ---
 
 ## Judge Configuration
@@ -341,6 +376,7 @@ stop the run: that question is graded by the refusal detector and recorded as `h
 
 ## Agent Wrapper Testing
 
+The TUI setup screen is the primary interface for selecting core suites and the independent LLM security categories.
 An *agent wrapper* is a security-agent persona (PentestGPT, CAI, or VulnBot) run in front of the model — not to
 be confused with the `harmful_refusal` / `benign_helpfulness` / `dual_use_judgment` research buckets, which are
 safety-behaviour dimensions scored on every run regardless of wrapper.
@@ -384,6 +420,34 @@ python gauntlet_runner.py \
 python tools/compare_results.py results/RUN_A.json results/RUN_B.json
 ```
 
+## Visualizations
+
+Install the plotting dependency from `benchmark-requirements.txt`, then plot one or more
+compatible reports. Populations are separated by category and attack type; sample sizes are
+printed on every bar and missing metrics remain missing.
+
+```bash
+python tools/visualize_benchmark.py results/run-a.json results/run-b.json \
+  --output-dir plots/comparison --format png --format pdf
+
+python tools/visualize_benchmark.py results/security.json \
+  --metric attack_success --metric task_correctness --model qwen3.5:9b \
+  --output-dir plots/security
+```
+
+Weight visualization measures actual local tensors and is deliberately separate from benchmark
+performance. Supported inputs are `.npy`, `.npz`, and `.safetensors` (the last requires the
+optional `safetensors` package). Tensors are inspected on CPU and deterministically sampled for
+plots; PyTorch pickle checkpoints and GGUF files are rejected rather than guessed at.
+
+```bash
+python tools/visualize_model_weights.py model.safetensors model-00002-of-00004.safetensors \
+  --sample-size 100000 --output-dir plots/weights --format png --format pdf
+```
+
+Generated plots belong in ignored `plots/` or another output directory and are not research
+evidence by themselves. Tensor distributions do not explain or cause security behavior.
+
 ---
 
 ## Running Tests
@@ -392,7 +456,9 @@ python tools/compare_results.py results/RUN_A.json results/RUN_B.json
 python -m pytest tests/ -v
 ```
 
-63 tests covering the benchmark engine, challenge generators, gauntlet orchestrator, wrapper server, GUI server, observers, TUI components, the results model and PDF export, and run resume/recovery.
+Tests cover the benchmark engine, challenge generators, memory experiments, storage integrity,
+comparisons, gauntlet orchestrator, wrapper server, GUI, reports, and resume/recovery. If
+`pytest` is unavailable, run `python3 -m unittest discover -s tests -q`.
 
 ---
 
