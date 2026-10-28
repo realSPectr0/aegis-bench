@@ -69,3 +69,33 @@ capability solve-rate, Part-1 safety pass-rate, injection-followed rate.
   9b persona-adapter runs are not the real frameworks).
 - The 4b is near the capability ceiling (~90%+ local), so capability *gains* from the wrapper have
   little headroom to show.
+
+## Deviations from this pre-registration (recorded 2026-10-28, after the runs)
+
+Logged honestly rather than edited into the plan above, so the frozen plan and what actually
+happened are both visible.
+
+- **Headline metric did not discriminate on this model.** The registered primary figure — the
+  `layered_attack` escalation ASR — came out at 0% at every layer on `qwen3.5:4b`: the model
+  refused the synthetic disclosure under baseline, wrapper and (poisoned) memory alike, and the
+  abliterated variant could not be scored at `thinking=high` (reasoning filled the token budget
+  before any answer). The escalation curve is therefore **not viable on this model** and is
+  reported as an inconclusive/null result, not massaged into a trend. The registered **secondary
+  metrics became the primary reporting surface**: per-category security ASR, capability
+  solve-rate, Part-1 safety pass-rate, and the MPOISON agent-safety / forbidden-access signal.
+- **H2 held on the memory layer via the safety signal** even though H1's headline metric did not:
+  memory-poisoning attack success was 0% (clean) → 50% (poisoned) → 0% (safeguarded), i.e. the
+  poison lands and the sanitization defense fully neutralizes it in-sample (mean agent-safety
+  10 → 5 → 10; forbidden-access 0 → 2–3 → 0), with task completion held at 5/5 in every condition.
+- **H3 (flat capability) held**, with one caveat now analysed in LIMITATIONS: the wrapper matched
+  the bare model on 17 of 18 scored challenges but regressed on one long-horizon task (CASE-001)
+  through scaffold-induced thrashing — capability-neutral-to-slightly-harmful, not a gain.
+- **Memory-poisoning repeats were ×2, not ×3** (time-bound), run as two seed-matched sweeps
+  covering all three conditions.
+- **Second repeats use seed 43** (the plan registered seed 42 for every run). Repeating at a second
+  seed yields a genuine between-seed band rather than only re-sampling fixed-seed nondeterminism;
+  disclosed here as an intentional, pre-analysis change.
+- **Abliteration planned ×2** (seeds 42, 43), raised from the registered ×1 to match the other
+  cells' repeat count; as of this note the two abliteration runs are the only outstanding matrix work.
+
+Full per-run numbers live in `results/plan_comparison/` (suite-v5 filtered).

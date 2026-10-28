@@ -36,3 +36,21 @@ timeout, emitting an error stub in place of a review. We re-ran the judge once c
 returned and it confirmed the original unsolved outcome, but this shows that single-pass,
 network-dependent judging can inject non-deterministic gaps; caching transcripts for deterministic
 offline re-judging would harden the pipeline.
+
+A clear model-size × framework-complexity interaction emerged on the long-horizon tasks. On the
+incident-reconstruction challenge (CASE-001) the bare model solved it in 8–9 actions, but under the
+AegisAgent wrapper the same model exhausted its 60-action budget without finishing (7/10 on content,
+missing attacker_ip and initial_access — two fields the bare model recovers trivially). The scaffold's
+retrieval, planning and reflection steps — meant to organise a capable agent — instead diluted the
+4b's limited context with retrieved snippets, drove it into plan-directed tangents ("prolonged
+searches unrelated to the report"), and induced self-doubt that reversed correct findings; it also
+emitted 11 malformed actions (an action-protocol reliability cost) and submitted 6 times prematurely.
+Because the bare model needs under ten actions, this is not budget starvation — a larger cap would
+only prolong the thrashing. We read it as a small-model × heavy-scaffold tradeoff: agentic scaffolds
+(RAG, ReAct-style planning, reflection) were designed for large, instruction-robust models and their
+benefit scales with spare capacity, of which a 4-billion-parameter model has little; the same
+machinery that organises a frontier model taxes and derails a small one. Capability was otherwise
+flat across baseline and wrapper (identical solves on 17 of 18 scored challenges), so we report the
+wrapper as capability-neutral-to-slightly-harmful on this model, with the regression concentrated in
+long-horizon tasks. A lighter configuration (`--no-rag` / `--no-planner`, already supported) is the
+natural test of whether the scaffolding itself is the cause, and is left as future work.
